@@ -2,16 +2,16 @@
   "command": "node",
   "args": ["main.mjs"],
   "restart_policy": "always",
-  "display_name": "工作台浏览器",
-  "description": "侧边栏里的真浏览器",
+  "display_name": "Workbench Browser",
+  "description": "A real browser in the side panel",
   "has_web_ui": true,
   "ui_config": {
-    "display_name": "工作台浏览器",
+    "display_name": "Workbench Browser",
     "views": [
       {
         "path": "/",
         "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
-        "title": "工作台浏览器"
+        "title": "Workbench Browser"
       }
     ]
   }

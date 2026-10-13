@@ -154,29 +154,31 @@ try {
     assert.equal(status.tabs[0].url, pageUrl);
   });
 
-  await step('插件后台不在时，工具如实报「没在运行」，不装作成功', async () => {
-    const lonely = spawn(process.execPath, [join(root, 'mcp', 'launch.mjs')], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, WORKBENCH_BROWSER_DATA: join(dataDir, 'nowhere') },
-    });
-    const reply = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('没回应')), 30000);
-      createInterface({ input: lonely.stdout }).on('line', (line) => {
-        try {
-          const message = JSON.parse(line);
-          if (message.id === 7) {
-            clearTimeout(timer);
-            resolve(message);
-          }
-        } catch {
-          // 忽略
-        }
+  await step('插件后台不在时，工具如实报「没在运行」，不装作成功（中文、英文各说一遍）', async () => {
+    for (const [lang, expected] of [['zh', /没在运行/], ['en', /is not running/]]) {
+      const lonely = spawn(process.execPath, [join(root, 'mcp', 'launch.mjs')], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, WORKBENCH_BROWSER_DATA: join(dataDir, 'nowhere'), WORKBENCH_LANG: lang },
       });
-      lonely.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'list_pages', arguments: {} } }) + '\n');
-    });
-    lonely.kill();
-    assert.equal(reply.result.isError, true);
-    assert.match(reply.result.content[0].text, /没在运行/);
+      const reply = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('没回应')), 30000);
+        createInterface({ input: lonely.stdout }).on('line', (line) => {
+          try {
+            const message = JSON.parse(line);
+            if (message.id === 7) {
+              clearTimeout(timer);
+              resolve(message);
+            }
+          } catch {
+            // 忽略
+          }
+        });
+        lonely.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'list_pages', arguments: {} } }) + '\n');
+      });
+      lonely.kill();
+      assert.equal(reply.result.isError, true);
+      assert.match(reply.result.content[0].text, expected);
+    }
   });
 } finally {
   mcp?.kill();

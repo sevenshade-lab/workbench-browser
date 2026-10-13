@@ -5,11 +5,13 @@
 //   node scripts/install.mjs --apply    真的装：先整份备份原来的，再换文件，再重启插件
 //
 // 换文件和重启插件必须一起做：旧后台还在跑的时候目录里已经是新文件，它会找不到自己的页面。
+// 说的话跟着系统语言走（中文或英文），WORKBENCH_LANG 可以指定。
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { say } from '../sidecars/panel/lib/lang.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PARTS = ['plugin.json', 'LICENSE', 'assets', 'mcp', 'sidecars', 'skills', 'tools'];
@@ -19,16 +21,18 @@ const dataDir = join(homedir(), '.gemini', 'antigravity', 'sidecar_data', 'workb
 const apply = process.argv.includes('--apply');
 const stamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace(/[-: ]/g, '').slice(0, 12);
 const backup = join(root, '原版备份', stamp);
-const say = (text) => console.log((apply ? '' : '[预演] ') + text);
+const note = (text) => console.log((apply ? '' : say('[预演] ', '[dry run] ')) + text);
 
 if (!existsSync(join(root, 'plugin.json'))) {
-  console.error('没找到 plugin.json，脚本要在项目里运行。');
+  console.error(say('没找到 plugin.json，脚本要在项目里运行。', 'plugin.json was not found. Run this script from inside the project.'));
   process.exit(1);
 }
 
 // 只备份「不是这个项目装进去的」版本：本项目的版本里一定有 lib/browser.mjs，源码都在这边，不用再存一份。
 const hasOld = existsSync(join(target, 'plugin.json')) && !existsSync(join(target, 'sidecars', 'panel', 'lib', 'browser.mjs'));
-say(hasOld ? `备份原来的插件到 ${backup}` : '装着的是本项目的版本（或者还没装过），不用备份');
+note(hasOld
+  ? say(`备份原来的插件到 ${backup}`, `Back up the plugin that is installed now to ${backup}`)
+  : say('装着的是本项目的版本（或者还没装过），不用备份', 'The installed copy came from this project (or nothing is installed yet): no backup needed'));
 if (apply && hasOld) {
   mkdirSync(backup, { recursive: true });
   cpSync(target, join(backup, 'plugin'), { recursive: true });
@@ -57,8 +61,8 @@ function emptyDir(dir) {
   }
 }
 
-say(`换文件：${target}`);
-if (existsSync(overlay)) say(`叠上附加功能：${overlay}`);
+note(say(`换文件：${target}`, `Replace the files in ${target}`));
+if (existsSync(overlay)) note(say(`叠上附加功能：${overlay}`, `Overlay the private extensions from ${overlay}`));
 if (apply) {
   mkdirSync(target, { recursive: true });
   emptyDir(target);
@@ -96,7 +100,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // agy 只是改配置里的开关，Antigravity 过几秒才注意到。关了马上开，它根本没察觉，后台还是旧的那个进程。
 // 所以要等旧后台真的退了再开，开了之后等新后台真的起来。
-say('重启插件：agy plugin disable workbench-browser → 等旧后台退出 → enable → 等新后台起来');
+note(say(
+  '重启插件：agy plugin disable workbench-browser → 等旧后台退出 → enable → 等新后台起来',
+  'Restart the plugin: agy plugin disable workbench-browser → wait for the old backend to exit → enable → wait for the new backend',
+));
 let restarted = !apply;
 if (apply) {
   const oldPid = sidecarPid();
@@ -110,10 +117,20 @@ if (apply) {
       restarted = pid !== oldPid && alive(pid);
     }
   } catch (error) {
-    console.log(`用命令重启插件出错：${error.message}`);
+    console.log(say(`用命令重启插件出错：${error.message}`, `Restarting the plugin from the command line failed: ${error.message}`));
   }
 }
 
-if (!apply) console.log('\n以上是预演，什么都没动。加 --apply 才会真的执行。');
-else if (restarted) console.log('\n装好了，新后台已经起来。侧边栏里原来开着的「工作台浏览器」要关掉重开一次；agent 的浏览器工具和使用说明可能要重启 Antigravity 才出现。');
-else console.log('\n文件已经换好，但没等到新后台起来。请到 Antigravity 的 Customizations → Installed 里把 workbench-browser 关掉再打开。');
+if (!apply) {
+  console.log(say('\n以上是预演，什么都没动。加 --apply 才会真的执行。', '\nThis was a dry run: nothing was changed. Add --apply to do it.'));
+} else if (restarted) {
+  console.log(say(
+    '\n装好了，新后台已经起来。侧边栏里原来开着的面板要关掉重开一次；agent 的浏览器工具和使用说明可能要重启 Antigravity 才出现。',
+    '\nInstalled, and the new backend is up. Close and reopen the panel if it was open. The agent tools and the skill may need an Antigravity restart to show up.',
+  ));
+} else {
+  console.log(say(
+    '\n文件已经换好，但没等到新后台起来。请到 Antigravity 的 Customizations → Installed 里把 workbench-browser 关掉再打开。',
+    '\nThe files are in place, but the new backend did not come up in time. Turn workbench-browser off and on again under Customizations → Installed in Antigravity.',
+  ));
+}

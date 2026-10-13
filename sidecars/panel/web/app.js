@@ -1,6 +1,36 @@
 (() => {
   const $ = (id) => document.getElementById(id);
-  const token = new URLSearchParams(location.search).get('token') || '';
+  const query = new URLSearchParams(location.search);
+  const token = query.get('token') || '';
+
+  // ---------- 语言 ----------
+  //
+  // 中文还是英文，按先后：地址里的 lang=（预览、测试用）→ 后台指定的（环境变量，或者只有一种语言的附加功能）
+  // → Antigravity 自己在用的语言（面板里的 navigator.language 就是它，一般跟着系统走）。中文用中文，其余用英文。
+  // 定下来以后随 /api/link 告诉后台，后台给人看的报错就和面板是同一种语言。
+  const lang = (() => {
+    const known = (value) => (value === 'zh' || value === 'en' ? value : '');
+    return known(query.get('lang')) || known(document.documentElement.dataset.forcedLang)
+      || (/^zh(?![a-z])/i.test(navigator.language || '') ? 'zh' : 'en');
+  })();
+  // 字表万一没加载上，界面照常能用，只是字的位置显示键名。
+  const strings = window.workbenchStrings || {};
+  const t = (key) => (strings[key] ? strings[key][lang] : key);
+  // 把 index.html 里只写了键名的地方填上字。
+  (() => {
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+    document.title = t('appName');
+    const fill = (attribute, apply) => {
+      for (const element of document.querySelectorAll(`[${attribute}]`)) apply(element, t(element.getAttribute(attribute)));
+    };
+    fill('data-t', (element, text) => { element.textContent = text; });
+    fill('data-t-title', (element, text) => {
+      element.title = text;
+      element.setAttribute('aria-label', text);
+    });
+    fill('data-t-label', (element, text) => element.setAttribute('aria-label', text));
+    fill('data-t-placeholder', (element, text) => { element.placeholder = text; });
+  })();
   const view = $('view');
   const canvas = $('screen');
   const ime = $('ime');
@@ -36,7 +66,7 @@
     try {
       return await (await call(path, body)).json();
     } catch (error) {
-      return { ok: false, error: '插件后台没有响应' };
+      return { ok: false, error: t('noResponse') };
     }
   }
 
@@ -46,22 +76,23 @@
   };
   document.addEventListener('securitypolicyviolation', (event) => tell(`被安全策略拦截：${event.violatedDirective} ${event.blockedURI}`));
   window.addEventListener('error', (event) => tell(`脚本出错：${event.message} @${event.lineno}`));
+  if (!window.workbenchStrings) tell('strings.js 没加载上，界面上的字只能显示键名');
 
   async function connect() {
     transport = null;
-    if (!hasFrame) showVeil('正在连接插件后台');
-    const link = await api('/api/link');
+    if (!hasFrame) showVeil(t('connecting'));
+    const link = await api('/api/link', { lang });
     if (!link.ok) {
       retries += 1;
-      showVeil(retries > 5 ? '连不上插件后台。插件可能刚重启过：请关掉这个面板再重新打开' : '正在连接插件后台');
+      showVeil(t(retries > 5 ? 'unreachable' : 'connecting'));
       setTimeout(connect, Math.min(5000, 500 * 2 ** retries));
       return;
     }
     try {
       // 地址里带 transport=poll 是测试用的开关：跳过直连，专门走后备路。
-      if (new URLSearchParams(location.search).get('transport') === 'poll') throw new Error('测试开关');
+      if (query.get('transport') === 'poll') throw new Error('测试开关');
       transport = await openSocket(link);
-      tell(`面板已连上（直连，页面在 ${location.protocol}//${location.host}）`);
+      tell(`面板已连上（直连，页面在 ${location.protocol}//${location.host}；界面语言 ${lang}，Antigravity 报的是 ${navigator.language}）`);
     } catch (error) {
       tell(`直连不通（${error.message}），改用普通请求`);
       transport = openPolling(link);
@@ -74,7 +105,7 @@
   function lost() {
     transport = null;
     hasFrame = false;
-    showVeil('连接断开，正在重连');
+    showVeil(t('reconnecting'));
     setTimeout(connect, Math.min(5000, 500 * 2 ** retries++));
   }
 
@@ -268,8 +299,8 @@
   function renderVeil() {
     const tab = activeTab();
     if (state.error) showVeil(state.error, true);
-    else if (tab && tab.crashed) showVeil('这个页面崩溃了', true);
-    else if (!state.running || !hasFrame) showVeil('正在启动浏览器');
+    else if (tab && tab.crashed) showVeil(t('crashed'), true);
+    else if (!state.running || !hasFrame) showVeil(t('starting'));
     else veil.hidden = true;
   }
 
@@ -277,7 +308,7 @@
     const tab = activeTab();
     if (state.running && tab && tab.crashed) send({ t: 'reload' });
     else send({ t: 'start' });
-    showVeil('正在启动浏览器');
+    showVeil(t('starting'));
   };
 
   // ---------- 鼠标 ----------
@@ -435,7 +466,7 @@
     try {
       document.execCommand('copy');
     } catch {
-      toast('复制失败');
+      toast(t('copyFailed'));
     }
     holder.remove();
     if (focused && focused.focus) focused.focus({ preventScroll: true });
@@ -458,7 +489,7 @@
       item.className = 'tab';
       item.setAttribute('role', 'tab');
       item.setAttribute('aria-selected', String(tab.id === state.active));
-      const label = tab.url === 'about:blank' ? '新标签页' : tab.title || hostOf(tab.url) || '新标签页';
+      const label = tab.url === 'about:blank' ? t('newTab') : tab.title || hostOf(tab.url) || t('newTab');
       item.title = `${label}\n${tab.url}`;
       const dot = document.createElement('span');
       dot.className = 'tab-dot' + (tab.loading ? ' loading' : tab.busy ? ' busy' : '');
@@ -469,7 +500,7 @@
       close.className = 'tab-close';
       close.type = 'button';
       close.textContent = '×';
-      close.setAttribute('aria-label', '关闭标签页');
+      close.setAttribute('aria-label', t('closeTab'));
       close.onclick = (event) => {
         event.stopPropagation();
         send({ t: 'tab.close', id: tab.id });
@@ -490,7 +521,7 @@
     $('forward').disabled = !tab || !tab.canForward;
     const reload = $('reload');
     reload.textContent = tab && tab.loading ? '✕' : '↻';
-    reload.title = tab && tab.loading ? '停止' : '刷新';
+    reload.title = t(tab && tab.loading ? 'stop' : 'reload');
     reload.setAttribute('aria-label', reload.title);
     if (document.activeElement !== urlInput) urlInput.value = tab && tab.url !== 'about:blank' ? tab.url : '';
     renderVeil();
@@ -588,13 +619,13 @@
     input.hidden = true;
     input.value = '';
     $('modalCancel').hidden = false;
-    $('modalCancel').textContent = '取消';
-    $('modalOk').textContent = '确定';
+    $('modalCancel').textContent = t('cancel');
+    $('modalOk').textContent = t('ok');
     if (dialog) {
       if (dialog.type === 'beforeunload') {
-        $('modalText').textContent = '离开这个页面？没保存的内容会丢。';
-        $('modalCancel').textContent = '留下';
-        $('modalOk').textContent = '离开';
+        $('modalText').textContent = t('leavePage');
+        $('modalCancel').textContent = t('stay');
+        $('modalOk').textContent = t('leave');
       } else {
         $('modalText').textContent = dialog.message;
         $('modalCancel').hidden = dialog.type === 'alert';
@@ -604,7 +635,7 @@
         }
       }
     } else {
-      $('modalText').textContent = chooser.multiple ? '页面要选文件。填文件的完整路径，一行一个。' : '页面要选文件。填文件的完整路径。';
+      $('modalText').textContent = t(chooser.multiple ? 'chooseFiles' : 'chooseFile');
       input.hidden = false;
     }
     modal.hidden = false;
@@ -655,11 +686,13 @@
 
   function whenText(time, timeZone) {
     const options = timeZone ? { timeZone } : {};
-    const day = new Intl.DateTimeFormat('zh-CN', { ...options, year: 'numeric', month: 'numeric', day: 'numeric' });
+    // 中文界面按中文的写法；英文界面不指定，按这台机器自己的习惯（月和日谁在前各地不一样）。
+    const locale = lang === 'zh' ? 'zh-CN' : undefined;
+    const day = new Intl.DateTimeFormat(locale, { ...options, year: 'numeric', month: 'numeric', day: 'numeric' });
     if (day.format(time) === day.format(Date.now())) {
-      return new Intl.DateTimeFormat('zh-CN', { ...options, hour: '2-digit', minute: '2-digit', hour12: false }).format(time);
+      return new Intl.DateTimeFormat(locale, { ...options, hour: '2-digit', minute: '2-digit', hour12: false }).format(time);
     }
-    return new Intl.DateTimeFormat('zh-CN', { ...options, month: 'numeric', day: 'numeric' }).format(time);
+    return new Intl.DateTimeFormat(locale, { ...options, month: 'numeric', day: 'numeric' }).format(time);
   }
 
   function fillStart(data) {
@@ -723,6 +756,8 @@
   //
   // 后台的 extensions/ 里有附加功能时，它的脚本排在这个文件后面加载，通过这个对象往面板上加东西。
   window.workbenchBrowser = {
+    // 面板现在用的语言：'zh' 或 'en'。
+    lang,
     api,
     send,
     toast,

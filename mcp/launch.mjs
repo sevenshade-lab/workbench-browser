@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { say } from '../sidecars/panel/lib/lang.mjs';
 
 const dataDir = process.env.WORKBENCH_BROWSER_DATA
   || join(homedir(), '.gemini', 'antigravity', 'sidecar_data', 'workbench-browser', 'panel', 'data');
@@ -29,21 +30,30 @@ async function wake() {
   try {
     endpoint = JSON.parse(readFileSync(join(dataDir, 'endpoint.json'), 'utf8'));
   } catch {
-    throw new Error('「工作台浏览器」插件没在运行：请在 Antigravity 的 Customizations → Installed 里确认它已启用。');
+    throw new Error(say(
+      '「工作台浏览器」插件没在运行：请在 Antigravity 的 Customizations → Installed 里确认它已启用。',
+      'The workbench-browser plugin is not running. Check that it is enabled under Customizations → Installed in Antigravity.',
+    ));
   }
   let result;
   try {
     const response = await fetch(`http://127.0.0.1:${endpoint.port}/api/agent?op=ensure&key=${endpoint.key}`, { signal: AbortSignal.timeout(40000) });
     result = await response.json();
   } catch {
-    throw new Error('「工作台浏览器」插件后台没有响应：请在 Antigravity 的 Customizations → Installed 里把它关掉再打开。');
+    throw new Error(say(
+      '「工作台浏览器」插件后台没有响应：请在 Antigravity 的 Customizations → Installed 里把它关掉再打开。',
+      'The workbench-browser plugin backend is not responding. Turn the plugin off and on again under Customizations → Installed in Antigravity.',
+    ));
   }
-  if (!result.ok) throw new Error(`内置浏览器没能启动：${result.error}`);
+  if (!result.ok) throw new Error(say(`内置浏览器没能启动：${result.error}`, `The built-in browser could not start: ${result.error}`));
 }
 
 const server = findServer();
 if (!server) {
-  console.error('没找到 Antigravity 自带的 chrome-devtools-mcp。可以用环境变量 CHROME_DEVTOOLS_MCP 指给它入口脚本的完整路径。');
+  console.error(say(
+    '没找到 Antigravity 自带的 chrome-devtools-mcp。可以用环境变量 CHROME_DEVTOOLS_MCP 指给它入口脚本的完整路径。',
+    'The chrome-devtools-mcp bundled with Antigravity was not found. Set the CHROME_DEVTOOLS_MCP environment variable to the full path of its entry script.',
+  ));
   process.exit(1);
 }
 

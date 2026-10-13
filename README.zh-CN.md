@@ -4,7 +4,7 @@
 
 Google Antigravity 的侧边栏插件：面板里跑一个真浏览器，人和 agent 共用同一批页面。agent 读页面结构去操作，做完读回来核对；你在侧边栏里看着它每一步，随时可以自己接手。
 
-![在侧边栏里打开一个禁止内嵌的网站](assets/demo.gif)
+![在侧边栏里打开一个禁止内嵌的网站](assets/demo.zh-CN.gif)
 
 非官方插件，和 Google 没有关系。
 
@@ -21,6 +21,7 @@ Google Antigravity 的侧边栏插件：面板里跑一个真浏览器，人和 
 - **新标签页**：点 + 开的是空白页，面板在上面画「常去」和「最近」，数据来自本机记下的去过的页（`history.json`，在插件的数据目录里，不往任何地方发，页面上可以清空）。站点图标由后台去取一次存下来。
 - **面板怎么连后台**：Antigravity 不让面板直连后台。面板页面挂在 `plugin://workbench-browser--panel-<端口>` 下面，它发的普通请求由 Antigravity 主进程转给一层带鉴权的网关，网关再转到后台；长连接这条路不转。所以面板先用普通请求问到后台的真实端口和一把钥匙（`/api/link`），再直连 `ws://127.0.0.1:<端口>`。直连不上时（比如从别的设备远程看 Antigravity）退回到全用普通请求：`/api/poll` 取画面和消息、`/api/input` 送鼠标键盘。面板走了哪条路、被什么拦了，会记进后台日志（`[面板] …` 开头的行）。
 - **agent**：插件自带一个 MCP 入口，转发到 Antigravity 自带的 chrome-devtools-mcp，接在同一个浏览器的调试端口上。agent 读的、点的就是侧边栏里那几页。
+- **语言**：界面有中文和英文。面板看 Antigravity 自己在用哪种语言（面板里的 `navigator.language`）：中文（含繁体）用中文，其余用英文；定下来以后告诉后台，后台给人看的报错跟着用同一种。还没有面板连上来的时候（比如 agent 先叫醒了浏览器），后台和 agent 用的小命令按系统语言来。环境变量 `WORKBENCH_LANG` 设成 `zh` 或 `en` 可以指定。浏览器本身启动时不指定语言，跟系统走，和平时的 Chrome 一样；想另指一种就设 `WORKBENCH_BROWSER_LANG`（比如 `ja`、`en-GB`）。
 
 没人看、agent 也 30 分钟没动，浏览器自动关掉；下次打开面板或 agent 调工具时再起。插件后台被杀，浏览器跟着退（靠调试管道断开），不留孤儿进程。
 
@@ -34,7 +35,7 @@ Google Antigravity 的侧边栏插件：面板里跑一个真浏览器，人和 
 agy plugin install https://github.com/sevenshade-lab/workbench-browser
 ```
 
-装好后插件后台会自己起来，侧边栏里就有「工作台浏览器」；没有的话到 Antigravity 的 Customizations → Installed 里确认 `workbench-browser` 已启用，并确认它的后台（sidecar）是启用状态（见 Antigravity 文档的 Sidecars 一节）。agent 的浏览器工具入口由插件后台第一次启动时自己登记（写 `mcp_config.json`），工具没出现就重启一次 Antigravity。
+装好后插件后台会自己起来，侧边栏里就有 Workbench Browser 这个面板；没有的话到 Antigravity 的 Customizations → Installed 里确认 `workbench-browser` 已启用，并确认它的后台（sidecar）是启用状态（见 Antigravity 文档的 Sidecars 一节）。agent 的浏览器工具入口由插件后台第一次启动时自己登记（写 `mcp_config.json`），工具没出现就重启一次 Antigravity。
 
 **升级（已经装着旧版时）**：先在 Customizations → Installed 里把它停用，等几秒让后台退出，再跑上面的安装命令。插件开着的时候直接装，`agy` 会先清空旧目录、再因为目录被占用而失败，留下一个空目录；遇到了就停用插件、重启 Antigravity，再装一次。
 
@@ -60,8 +61,8 @@ node scripts/install.mjs --apply    换文件并重启插件
 plugin.json                  插件清单
 sidecars/panel/main.mjs      后台入口：页面、接口、面板连接
 sidecars/panel/lib/          browser（浏览器）、cdp（调试管道）、ws（面板连接）、
-                             helper-script（注入页面的小帮手）、history（去过的页）
-sidecars/panel/web/          面板界面
+                             helper-script（注入页面的小帮手）、history（去过的页）、lang（界面语言）
+sidecars/panel/web/          面板界面；strings.js 是面板上的字，中英文各一份
 mcp/launch.mjs               agent 浏览器工具的入口
 tools/wb.mjs                 agent 用的命令：status / open
 skills/workbench-browser/    给 agent 看的使用说明
@@ -86,12 +87,12 @@ node tests/lifecycle.mjs   后台的进退：新后台请旧后台让位；语�
 
 三个都用临时目录和本机临时起的测试页，不碰任何真网站。
 
-这些测试是直接连后台跑的，**测不到 Antigravity 中间那层转发**。改了面板和后台之间怎么连，一定要装进 Antigravity 实际开一次面板，再看后台日志里有没有 `[面板] 面板已连上`。在预览窗里想专门走后备路，地址后面加 `&transport=poll`。
+这些测试是直接连后台跑的，**测不到 Antigravity 中间那层转发**。改了面板和后台之间怎么连，一定要装进 Antigravity 实际开一次面板，再看后台日志里有没有 `[面板] 面板已连上`。在预览窗里想专门走后备路，地址后面加 `&transport=poll`；想看另一种语言的界面，加 `&lang=en` 或 `&lang=zh`。
 
 # 已知的边界
 
 - **只在 Windows 上跑过。** 代码里有 macOS、Linux 的浏览器路径，但没实测。
-- **面板界面目前只有中文。**
+- **界面只有中文和英文两种；后台日志和代码注释是中文的。**
 - **依赖了几处 Antigravity 文档里没写的行为**：`sidecar.json` 里声明面板的那几个字段、面板问到端口后直连后台、靠语言服务判断 Antigravity 还在不在、到安装目录里找自带的 chrome-devtools-mcp、后台自己往插件目录里写 `mcp_config.json`。Antigravity 升级后这几处可能要跟着改。
 - **登录、验证只能人自己来。** 登录页和二维码在面板里能正常显示，但网站认不认一个无界面浏览器因站而异。
 - 屏幕缩放比在浏览器启动时定死（原因见 `lib/browser.mjs` 里 `#applyViewport` 的说明）。面板换到缩放比不同的屏幕，画面会被缩放显示，下次浏览器启动时跟上。浏览器如果是 agent 先叫醒的（那时不知道缩放比），第一个面板连上来时会按面板的缩放比重开一次，标签页按地址恢复，页面里没提交的内容会丢。

@@ -5,8 +5,9 @@ import net from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Response, SidecarApp } from 'sidecar_sdk';
-import { BrowserHost } from './lib/browser.mjs';
+import { BrowserHost, httpOnly } from './lib/browser.mjs';
 import { History } from './lib/history.mjs';
+import { forceLanguage, forcedLanguage, language, reportLanguage, say } from './lib/lang.mjs';
 import { acceptWebSocket, rejectUpgrade } from './lib/ws.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -69,7 +70,7 @@ browser.on('settled', (tab) => {
 
 function openExternal(url) {
   const parsed = new URL(url);
-  if (!/^https?:$/.test(parsed.protocol)) throw new Error('只能打开 http 或 https 地址');
+  if (!/^https?:$/.test(parsed.protocol)) throw httpOnly();
   const [command, args] = process.platform === 'win32' ? ['explorer.exe', [parsed.href]]
     : process.platform === 'darwin' ? ['open', [parsed.href]] : ['xdg-open', [parsed.href]];
   spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
@@ -83,10 +84,12 @@ const file = (path, contentType, edit = (text) => text) => () => new Response(ed
   headers: { 'Cache-Control': 'no-store' },
 });
 const asset = (name, contentType, edit) => file(join(WEB, name), contentType, edit);
-// 附加功能要加载的脚本和样式，在送出页面时填进去。
+// 送出页面时填两样东西：附加功能要加载的脚本和样式；语言是不是被指定死了（没指定就由面板自己定，见 lib/lang.mjs）。
 app.page('/', asset('index.html', 'text/html; charset=utf-8', (html) => html
+  .replace('<html', () => `<html data-forced-lang="${forcedLanguage()}"`)
   .replace('</head>', () => panelTags.head + '</head>')
   .replace('</body>', () => panelTags.body + '</body>')));
+app.page('/strings.js', asset('strings.js', 'application/javascript; charset=utf-8'));
 app.page('/app.js', asset('app.js', 'application/javascript; charset=utf-8'));
 app.api('/styles.css', asset('styles.css', 'text/css; charset=utf-8'), 'GET');
 
@@ -116,7 +119,7 @@ const keyOk = (given) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 app.api('/api/agent', guarded(async (data) => {
-  if (!keyOk(data.key)) return { ok: false, error: '钥匙不对' };
+  if (!keyOk(data.key)) return { ok: false, error: say('钥匙不对', 'Wrong key') };
   lastAgentPing = Date.now();
   switch (data.op) {
     case 'ensure':
@@ -124,7 +127,7 @@ app.api('/api/agent', guarded(async (data) => {
       return { ok: true, debugPort: browser.debugPort, profileDir: browser.profileDir };
     case 'status':
       // panels 是连着的面板总数，其中 polling 个走的是普通请求那条后备路。
-      return { ok: true, ...browser.snapshot(), debugPort: browser.debugPort, panels: clients.size, polling: pollClients.size };
+      return { ok: true, ...browser.snapshot(), debugPort: browser.debugPort, panels: clients.size, polling: pollClients.size, lang: language() };
     case 'open':
       await browser.ensure();
       return { ok: true, tab: await browser.navigate(String(data.url || '')) };
@@ -134,7 +137,7 @@ app.api('/api/agent', guarded(async (data) => {
       return { ok: true };
     default:
       if (Object.hasOwn(agentOps, data.op)) return agentOps[data.op](data);
-      return { ok: false, error: '没有这个操作' };
+      return { ok: false, error: say('没有这个操作', 'Unknown operation') };
   }
 }), 'GET');
 
@@ -146,6 +149,7 @@ app.api('/api/agent', guarded(async (data) => {
 //   panelScript  面板里要加载的脚本（文件路径），用 window.workbenchBrowser 加按钮和侧栏
 //   panelStyle   面板里要加载的样式（文件路径）
 //   timeZone     面板上的日期按哪个时区显示（不给就按系统的）
+//   language     这个附加功能只有一种语言（'zh' 或 'en'）时声明，整个面板就固定用它，免得一半中文一半英文
 const agentOps = {};
 const panelTags = { head: '', body: '' };
 let displayTimeZone = '';
@@ -157,6 +161,7 @@ for (const name of existsSync(EXTENSIONS_DIR) ? readdirSync(EXTENSIONS_DIR).sort
     const made = (await setup({ app, guarded, browser, broadcast, log, sleep, dataDir: DATA_DIR })) || {};
     Object.assign(agentOps, made.agentOps);
     if (made.timeZone) displayTimeZone = made.timeZone;
+    if (made.language) forceLanguage(made.language);
     if (made.panelScript) {
       app.page(`/ext-${name}.js`, file(made.panelScript, 'application/javascript; charset=utf-8'));
       panelTags.body += `<script src="/ext-${name}.js"></script>
@@ -406,10 +411,14 @@ setInterval(() => {
   }
 }, 5000).unref();
 
-app.api('/api/link', guarded(() => ({ ok: true, port, key: panelKey, session: randomBytes(12).toString('hex') })));
+// 面板来问路的时候顺便报上它定的界面语言，这边给人看的报错跟着用同一种。
+app.api('/api/link', guarded((data) => {
+  reportLanguage(data.lang);
+  return { ok: true, port, key: panelKey, session: randomBytes(12).toString('hex') };
+}));
 app.api('/api/poll', guarded(async (data) => {
   const client = pollClient(data.session, true);
-  if (!client) return { ok: false, error: '会话无效' };
+  if (!client) return { ok: false, error: say('会话无效', 'Invalid session') };
   return new Response(await client.next(Number(data.frameSeq) || 0), {
     contentType: 'application/octet-stream',
     headers: { 'Cache-Control': 'no-store' },
@@ -418,7 +427,7 @@ app.api('/api/poll', guarded(async (data) => {
 app.api('/api/input', guarded((data) => {
   // 面板一连上就先报自己的大小，这一条常常比第一次 /api/poll 先到，所以这里也要能开出会话。
   const client = pollClient(data.session, true);
-  if (!client) return { ok: false, error: '会话无效' };
+  if (!client) return { ok: false, error: say('会话无效', 'Invalid session') };
   client.lastSeen = Date.now();
   for (const message of Array.isArray(data.messages) ? data.messages : []) handleClientMessage(client, message);
   return { ok: true };

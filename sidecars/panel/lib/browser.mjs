@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CdpPipe } from './cdp.mjs';
 import { HELPER_BINDING, HELPER_SOURCE, HELPER_WORLD } from './helper-script.mjs';
+import { say } from './lang.mjs';
 
 // 面板里那个真浏览器：一个无界面的 Chrome（没有就用 Edge），有自己的资料目录，登录状态留在里面。
 // 画面一帧帧送给面板，面板上的鼠标键盘原样送回来。同一个浏览器另开了调试端口，
@@ -30,6 +31,8 @@ export function findBrowserExecutable() {
   return candidates.find((path) => path && existsSync(path)) || null;
 }
 
+export const httpOnly = () => new Error(say('只能打开 http 或 https 地址', 'Only http and https addresses can be opened'));
+
 // 地址栏里敲的东西 → 能打开的地址。只放行 http/https，本机文件和 chrome:// 之类不给进。
 export function normalizeUrl(input, home) {
   const raw = String(input || '').trim();
@@ -39,7 +42,7 @@ export function normalizeUrl(input, home) {
   const search = () => 'https://www.bing.com/search?q=' + encodeURIComponent(raw);
   let candidate = raw;
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
-    if (/^(javascript|data|file|chrome|view-source|blob|about):/i.test(raw)) throw new Error('只能打开 http 或 https 地址');
+    if (/^(javascript|data|file|chrome|view-source|blob|about):/i.test(raw)) throw httpOnly();
     const hostLike = /^(localhost|\d{1,3}(\.\d{1,3}){3}|[^\s/:]+\.[^\s/:]+)(:\d+)?([/?#].*)?$/i.test(raw);
     if (!hostLike) return search();
     const local = /^(localhost|127\.|10\.|192\.168\.)/i.test(raw);
@@ -51,7 +54,7 @@ export function normalizeUrl(input, home) {
   } catch {
     return search();
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('只能打开 http 或 https 地址');
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw httpOnly();
   return url.href;
 }
 
@@ -63,8 +66,9 @@ function browserEnv() {
   return env;
 }
 
-const withTimeout = (promise, ms, what) => new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error(`${what}超时`)), ms);
+// zh、en 是「在等什么」的两种说法，超时的时候拼进报错里。
+const withTimeout = (promise, ms, zh, en) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(say(`${zh}超时`, `Timed out ${en}`))), ms);
   promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
 });
 
@@ -180,7 +184,7 @@ export class BrowserHost extends EventEmitter {
             return;
           } catch (error) {
             this.#teardown();
-            if (attempt >= 2 || error.message.includes('没找到')) {
+            if (attempt >= 2 || error.retry === false) {
               this.lastError = error.message;
               throw error;
             }
@@ -197,7 +201,10 @@ export class BrowserHost extends EventEmitter {
 
   async #launch() {
     const exe = findBrowserExecutable();
-    if (!exe) throw new Error('没找到 Chrome 或 Edge，内置浏览器起不来');
+    if (!exe) {
+      // 再试也不会有，直接报。
+      throw Object.assign(new Error(say('没找到 Chrome 或 Edge，内置浏览器起不来', 'Chrome or Edge was not found, so the built-in browser cannot start')), { retry: false });
+    }
     mkdirSync(this.profileDir, { recursive: true });
     this.launchDpr = this.viewport.dpr;
     this.panelSeen = false;
@@ -211,12 +218,16 @@ export class BrowserHost extends EventEmitter {
       '--hide-crash-restore-bubble',
       '--window-size=1280,800',
       `--force-device-scale-factor=${this.launchDpr}`,
-      '--lang=zh-CN',
+      // 浏览器自己用哪种语言（网站据此给哪种语言的页面）：不指定，让它跟系统走，和用户平时的 Chrome 一样。
+      // 想另指一种就设 WORKBENCH_BROWSER_LANG（比如 ja、en-GB）。
+      ...(process.env.WORKBENCH_BROWSER_LANG ? [`--lang=${process.env.WORKBENCH_BROWSER_LANG}`] : []),
       'about:blank',
     ], { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], windowsHide: true, env: browserEnv() });
     let stderr = '';
     proc.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-2000); });
-    proc.on('error', (error) => { this.lastError = `浏览器启动失败：${error.message}`; });
+    proc.on('error', (error) => {
+      this.lastError = say(`浏览器启动失败：${error.message}`, `The browser failed to start: ${error.message}`);
+    });
     const cdp = new CdpPipe(proc.stdio[3], proc.stdio[4]);
     this.#proc = proc;
     this.#cdp = cdp;
@@ -237,17 +248,21 @@ export class BrowserHost extends EventEmitter {
 
     let version;
     try {
-      version = await withTimeout(cdp.send('Browser.getVersion'), 20000, '等待浏览器启动');
+      version = await withTimeout(cdp.send('Browser.getVersion'), 20000, '等待浏览器启动', 'waiting for the browser to start');
     } catch (error) {
       // 同一个资料目录已经有浏览器在跑时，新进程会把活交给旧的然后立刻退出。
-      throw new Error(`浏览器没能启动（${error.message}）${stderr ? '：' + stderr.trim().split('\n').pop() : ''}`);
+      const detail = stderr ? stderr.trim().split('\n').pop() : '';
+      throw new Error(say(
+        `浏览器没能启动（${error.message}）${detail ? '：' + detail : ''}`,
+        `The browser could not start (${error.message})${detail ? ': ' + detail : ''}`,
+      ));
     }
     this.product = version.product || '';
     this.log(`浏览器已启动：${this.product}`);
 
     const firstTab = new Promise((resolve) => { this.#firstTab = resolve; });
     await cdp.send('Target.setDiscoverTargets', { discover: true });
-    await withTimeout(firstTab, 15000, '等待第一个标签页');
+    await withTimeout(firstTab, 15000, '等待第一个标签页', 'waiting for the first tab');
     await this.#restoreTabs();
   }
 
@@ -290,11 +305,11 @@ export class BrowserHost extends EventEmitter {
       else proc.once('exit', resolve);
     });
     try {
-      await withTimeout(cdp.send('Browser.close'), 3000, '关闭浏览器');
+      await withTimeout(cdp.send('Browser.close'), 3000, '关闭浏览器', 'closing the browser');
     } catch {
       proc?.kill();
     }
-    await withTimeout(exited, 8000, '等浏览器退出').catch(() => proc?.kill());
+    await withTimeout(exited, 8000, '等浏览器退出', 'waiting for the browser to exit').catch(() => proc?.kill());
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 
@@ -934,7 +949,7 @@ export class BrowserHost extends EventEmitter {
     const files = (Array.isArray(paths) ? paths : []).map((path) => String(path).trim()).filter(Boolean);
     if (!files.length) return;
     const missing = files.find((path) => !existsSync(path));
-    if (missing) throw new Error(`没有这个文件：${missing}`);
+    if (missing) throw new Error(say(`没有这个文件：${missing}`, `No such file: ${missing}`));
     await this.#send(tab, 'DOM.setFileInputFiles', { files, backendNodeId: chooser.backendNodeId });
   }
 
@@ -963,9 +978,9 @@ export class BrowserHost extends EventEmitter {
 
   async evaluate(expression, tabId = this.activeId) {
     const tab = this.tabs.get(tabId);
-    if (!tab) throw new Error('没有打开的页面');
+    if (!tab) throw new Error(say('没有打开的页面', 'No page is open'));
     const result = await this.#send(tab, 'Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || '页面里执行出错');
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || say('页面里执行出错', 'The script failed in the page'));
     return result.result?.value;
   }
 
@@ -976,7 +991,7 @@ export class BrowserHost extends EventEmitter {
   // ---------- 内部 ----------
 
   #send(tab, method, params = {}) {
-    if (!this.#cdp) return Promise.reject(new Error('浏览器没在运行'));
+    if (!this.#cdp) return Promise.reject(new Error(say('浏览器没在运行', 'The browser is not running')));
     return this.#cdp.send(method, params, tab.sessionId);
   }
 

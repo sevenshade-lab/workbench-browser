@@ -1,10 +1,12 @@
 // 脱离 Antigravity 单独把面板后台跑起来，开发和自测用。
 // 用法：node scripts/run-standalone.mjs [端口] [--private]   然后浏览器打开 http://127.0.0.1:<端口>/?token=dev
+// 想看另一种语言的界面，地址后面加 &lang=en 或 &lang=zh。
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { say } from '../sidecars/panel/lib/lang.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // 加 --private 把 private/ 里的附加功能也带上（有的话）。
@@ -13,7 +15,7 @@ const port = process.argv.slice(2).find((arg) => /^\d+$/.test(arg)) || process.e
 const privateExtensions = join(root, 'private', 'plugin', 'sidecars', 'panel', 'extensions');
 const loader = join(homedir(), '.gemini', 'antigravity', 'lib', 'node_modules', 'sidecar_sdk', 'register_loader.js');
 if (!existsSync(loader)) {
-  console.error('没找到 Antigravity 的 sidecar_sdk：' + loader);
+  console.error(say('没找到 Antigravity 的 sidecar_sdk：', 'The Antigravity sidecar_sdk was not found: ') + loader);
   process.exit(1);
 }
 

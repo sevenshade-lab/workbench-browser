@@ -1,58 +1,65 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>工作台浏览器</title>
+  <title>Workbench Browser</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/preload.js"></script>
 </head>
 <body>
+  <!--
+    给人看的字都不写在这一页里。属性里放的是 strings.js 里的键名，app.js 一启动就按语言填上：
+      data-t              元素里的文字
+      data-t-title        悬停提示，同时当读屏用的名称
+      data-t-label        只当读屏用的名称
+      data-t-placeholder  输入框里的占位字
+  -->
   <header class="tabbar">
     <div class="tabs" id="tabs" role="tablist"></div>
-    <button class="icon" id="newTab" type="button" title="新标签页" aria-label="新标签页">+</button>
+    <button class="icon" id="newTab" type="button" data-t-title="newTab">+</button>
   </header>
 
   <div class="navbar">
-    <button class="icon" id="back" type="button" title="后退" aria-label="后退" disabled>←</button>
-    <button class="icon" id="forward" type="button" title="前进" aria-label="前进" disabled>→</button>
-    <button class="icon" id="reload" type="button" title="刷新" aria-label="刷新">↻</button>
-    <input id="url" type="text" spellcheck="false" autocomplete="off" aria-label="地址" placeholder="输入网址，或者要搜的内容">
-    <button class="icon" id="external" type="button" title="在系统浏览器打开" aria-label="在系统浏览器打开">↗</button>
+    <button class="icon" id="back" type="button" data-t-title="back" disabled>←</button>
+    <button class="icon" id="forward" type="button" data-t-title="forward" disabled>→</button>
+    <button class="icon" id="reload" type="button">↻</button>
+    <input id="url" type="text" spellcheck="false" autocomplete="off" data-t-label="address" data-t-placeholder="addressHint">
+    <button class="icon" id="external" type="button" data-t-title="openExternal">↗</button>
   </div>
 
   <main class="stage" id="stage">
     <section class="view" id="view">
-      <canvas id="screen" aria-label="网页画面"></canvas>
-      <textarea id="ime" aria-label="网页输入" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+      <canvas id="screen" data-t-label="pageView"></canvas>
+      <textarea id="ime" data-t-label="pageInput" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
       <div class="select-menu" id="selectMenu" hidden></div>
       <div class="start" id="start" hidden>
         <div class="start-inner">
           <section id="startSites" hidden>
-            <div class="start-head"><h2>常去</h2></div>
+            <div class="start-head"><h2 data-t="frequent"></h2></div>
             <div class="tiles" id="startTiles"></div>
           </section>
           <section id="startRecent" hidden>
             <div class="start-head">
-              <h2>最近</h2>
-              <button class="text" id="startClear" type="button">清空记录</button>
+              <h2 data-t="recent"></h2>
+              <button class="text" id="startClear" type="button" data-t="clearHistory"></button>
             </div>
             <div class="recent" id="startList"></div>
           </section>
-          <p class="start-hint" id="startHint" hidden>在上面的地址栏输入网址，或者直接输入要搜的内容</p>
+          <p class="start-hint" id="startHint" data-t="startHint" hidden></p>
         </div>
       </div>
       <div class="veil" id="veil">
-        <p id="veilText">正在启动浏览器</p>
-        <button class="primary" id="veilRetry" type="button" hidden>重试</button>
+        <p id="veilText"></p>
+        <button class="primary" id="veilRetry" type="button" data-t="retry" hidden></button>
       </div>
       <div class="modal" id="modal" hidden>
         <form class="modal-box" id="modalForm">
           <p id="modalText"></p>
           <textarea id="modalInput" rows="2" hidden></textarea>
           <div class="modal-actions">
-            <button class="text" id="modalCancel" type="button">取消</button>
-            <button class="primary" id="modalOk" type="submit">确定</button>
+            <button class="text" id="modalCancel" type="button"></button>
+            <button class="primary" id="modalOk" type="submit"></button>
           </div>
         </form>
       </div>
@@ -60,6 +67,7 @@
     </section>
   </main>
 
+  <script src="/strings.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

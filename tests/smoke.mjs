@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'wb-smoke-'));
@@ -79,6 +80,8 @@ const sidecar = spawn(process.execPath, ['--import=' + pathToFileURL(loader).hre
     ANTIGRAVITY_SIDECAR_WEB_PORT: String(PORT),
     ANTIGRAVITY_SIDECAR_UI_TOKEN: 'smoke-token',
     ANTIGRAVITY_EXECUTABLE_DATA_DIR: dataDir,
+    // 语言不指定死：下面要看它跟着面板报的走。
+    WORKBENCH_LANG: '',
   },
 });
 let sidecarLog = '';
@@ -156,7 +159,44 @@ const agent = async (query) => {
   return response.json();
 };
 
+// 跑一下 agent 用的小命令，拿它说的话。
+const runTool = (args, env) => new Promise((resolve) => {
+  const child = spawn(process.execPath, [join(root, 'tools', 'wb.mjs'), ...args], {
+    env: { ...process.env, WORKBENCH_BROWSER_DATA: dataDir, ...env },
+    windowsHide: true,
+  });
+  let out = '';
+  child.stdout.on('data', (chunk) => { out += chunk; });
+  child.stderr.on('data', (chunk) => { out += chunk; });
+  child.on('exit', (code) => resolve({ code, out }));
+});
+
 try {
+  // 不用起后台就能查的：面板上的字。
+  await step('面板上的字：页面和脚本里用到的每个键，中文英文都有；页面里不留写死的字', async () => {
+    const web = join(root, 'sidecars', 'panel', 'web');
+    const holder = {};
+    runInNewContext(readFileSync(join(web, 'strings.js'), 'utf8'), { window: holder });
+    const strings = holder.workbenchStrings;
+    for (const [key, entry] of Object.entries(strings)) {
+      assert.ok(entry.zh && entry.en, `「${key}」缺一种语言`);
+      assert.ok(!/[一-鿿]/.test(entry.en), `「${key}」的英文里混着中文：${entry.en}`);
+    }
+    const page = readFileSync(join(web, 'index.html'), 'utf8');
+    const script = readFileSync(join(web, 'app.js'), 'utf8');
+    const used = new Set(['appName']);
+    for (const match of page.matchAll(/data-t(?:-title|-label|-placeholder)?="([^"]+)"/g)) used.add(match[1]);
+    // app.js 里的 t('键')，以及 t(条件 ? '键' : '键') 这种写法里的每个键。
+    for (const call of script.matchAll(/\bt\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g)) {
+      for (const match of call[1].matchAll(/'([A-Za-z]+)'/g)) used.add(match[1]);
+    }
+    assert.ok(used.size > 25, `只找到 ${used.size} 个键，多半是找法坏了`);
+    for (const key of used) assert.ok(strings[key], `用到了「${key}」，strings.js 里没有`);
+    for (const key of Object.keys(strings)) assert.ok(used.has(key), `strings.js 里的「${key}」没有地方用`);
+    const visible = page.replace(/<!--[\s\S]*?-->/g, '');
+    assert.ok(!/[一-鿿]/.test(visible), 'index.html 里还有写死的中文');
+  });
+
   await step('后台起来，写出 endpoint.json', async () => {
     await waitFor('endpoint.json', () => existsSync(join(dataDir, 'endpoint.json')), 10000);
     const endpoint = JSON.parse(readFileSync(join(dataDir, 'endpoint.json'), 'utf8'));
@@ -182,8 +222,9 @@ try {
   });
 
   await step('面板连上，浏览器启动，收到画面（先有损、静下来后补无损）', async () => {
-    // 和真面板一样：先用普通请求问到端口和钥匙，再直连。
-    const link = await (await panelCall('/api/link')).json();
+    // 和真面板一样：先用普通请求问到端口和钥匙（顺便报上界面语言），再直连。
+    // 报中文，后面核对报错原文的几步在哪种语言的系统上跑都一样。
+    const link = await (await panelCall('/api/link', { lang: 'zh' })).json();
     assert.equal(link.ok, true);
     assert.equal(link.port, PORT);
     socket = new WebSocket(`ws://127.0.0.1:${link.port}/ws?key=${link.key}`);
@@ -461,6 +502,44 @@ try {
 
     const malformed = await (await panelCall('/api/input', { session: '../x', messages: [] })).json();
     assert.deepEqual(malformed, { ok: false, error: '会话无效' });
+  });
+
+  await step('语言跟着面板走：面板报英文，后台给人看的报错就换成英文；不认识的语言不理', async () => {
+    const page = await (await fetch(`http://127.0.0.1:${PORT}/?token=smoke-token`)).text();
+    assert.match(page, /<html data-forced-lang="" lang="en">/, '没指定语言时，页面上不该带着指定的语言');
+    assert.match(page, /<script src="\/strings\.js"><\/script>\s*<script src="\/app\.js"><\/script>/);
+    const strings = await fetch(`http://127.0.0.1:${PORT}/strings.js?token=smoke-token`);
+    assert.equal(strings.status, 200);
+    assert.match(await strings.text(), /workbenchStrings/);
+
+    await panelCall('/api/link', { lang: 'en' });
+    assert.equal((await agent('op=status')).lang, 'en');
+    assert.deepEqual(await agent('op=board'), { ok: false, error: 'Unknown operation' });
+    // file: 地址在检查这一步就被拦下，不会真的去开。
+    const refused = await (await panelCall('/api/open-external', { url: 'file:///C:/x' })).json();
+    assert.deepEqual(refused, { ok: false, error: 'Only http and https addresses can be opened' });
+    assert.deepEqual(await (await panelCall('/api/input', { session: '../x', messages: [] })).json(), { ok: false, error: 'Invalid session' });
+
+    await panelCall('/api/link', { lang: 'fr' });
+    assert.equal((await agent('op=status')).lang, 'en');
+    await panelCall('/api/link', { lang: 'zh' });
+    assert.equal((await agent('op=status')).lang, 'zh');
+    assert.deepEqual(await agent('op=board'), { ok: false, error: '没有这个操作' });
+  });
+
+  await step('agent 用的小命令 wb.mjs：中文、英文各说一遍', async () => {
+    const zh = await runTool(['status'], { WORKBENCH_LANG: 'zh' });
+    assert.equal(zh.code, 0, zh.out);
+    assert.match(zh.out, /浏览器开着（.+），面板/);
+    const en = await runTool(['status'], { WORKBENCH_LANG: 'en' });
+    assert.equal(en.code, 0, en.out);
+    assert.match(en.out, /The browser is running \(.+\); the panel is/);
+    const usage = await runTool([], { WORKBENCH_LANG: 'en' });
+    assert.equal(usage.code, 1);
+    assert.match(usage.out, /^Usage: /);
+    const gone = await runTool(['status'], { WORKBENCH_LANG: 'en', WORKBENCH_BROWSER_DATA: join(dataDir, 'nowhere') });
+    assert.equal(gone.code, 1);
+    assert.match(gone.out, /is not running/);
   });
 } finally {
   const tabsFile = join(dataDir, 'tabs.json');
