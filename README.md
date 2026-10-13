@@ -11,7 +11,7 @@ A side-panel plugin for Google Antigravity: a real browser in the panel, shared 
 agy plugin install https://github.com/sevenshade-lab/workbench-browser
 ```
 
-Requires Chrome or Edge, and `node` on PATH. Only tested on Windows so far; installing by repository URL has not been exercised yet. The panel UI and the rest of this document are in Chinese. MIT licensed.
+Requires Chrome or Edge, and `node` on PATH. Only tested on Windows so far. To upgrade, disable the plugin and wait a few seconds before running the install command again (see the note in the install section). The panel UI and the rest of this document are in Chinese. MIT licensed.
 
 ---
 
@@ -43,7 +43,9 @@ Antigravity 的侧边栏插件「工作台浏览器」：面板里跑一个真�
 agy plugin install https://github.com/sevenshade-lab/workbench-browser
 ```
 
-装好后在 Antigravity 的 Customizations → Installed 里确认 `workbench-browser` 已启用，侧边栏里就有「工作台浏览器」。agent 的浏览器工具入口由插件后台第一次启动时自己登记（写 `mcp_config.json`），工具没出现就重启一次 Antigravity。
+装好后插件后台会自己起来，侧边栏里就有「工作台浏览器」；没有的话到 Antigravity 的 Customizations → Installed 里确认 `workbench-browser` 已启用。agent 的浏览器工具入口由插件后台第一次启动时自己登记（写 `mcp_config.json`），工具没出现就重启一次 Antigravity。
+
+**升级（已经装着旧版时）**：先在 Customizations → Installed 里把它停用，等几秒让后台退出，再跑上面的安装命令。插件开着的时候直接装，`agy` 会先清空旧目录、再因为目录被占用而失败，留下一个空目录；遇到了就停用插件、重启 Antigravity，再装一次。
 
 从源码装（改了代码之后换版本也用它）：
 
@@ -90,7 +92,6 @@ node tests/lifecycle.mjs   后台的进退：新后台请旧后台让位；语�
 
 - **只在 Windows 上跑过。** 代码里有 macOS、Linux 的浏览器路径，但没实测。
 - **依赖了几处 Antigravity 文档里没写的行为**：面板问到端口后直连后台、靠语言服务判断 Antigravity 还在不在、到安装目录里找自带的 chrome-devtools-mcp、后台自己往插件目录里写 `mcp_config.json`。Antigravity 升级后这几处可能要跟着改。
-- **用 `agy plugin install <仓库地址>` 装这条路还没有实际走过**，目前只验证过 `scripts/install.mjs`。
 - **登录、验证只能人自己来。** 登录页和二维码在面板里能正常显示，但网站认不认一个无界面浏览器因站而异。浏览器如实报自己是无界面、受程序控制的，没有做任何伪装，也不会去绕验证码。
 - 屏幕缩放比在浏览器启动时定死（原因见 `lib/browser.mjs` 里 `#applyViewport` 的说明）。面板换到缩放比不同的屏幕，画面会被缩放显示，下次浏览器启动时跟上。浏览器如果是 agent 先叫醒的（那时不知道缩放比），第一个面板连上来时会按面板的缩放比重开一次，标签页按地址恢复，页面里没提交的内容会丢。
 - `agy plugin disable` 之后 Antigravity 要过几秒才真的停掉后台，安装脚本会等它退了再 `enable`；手动操作时也要等一下，否则后台还是旧的那个进程。
