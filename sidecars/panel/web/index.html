@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工作台浏览器</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/preload.js"></script>
+</head>
+<body>
+  <header class="tabbar">
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <button class="icon" id="newTab" type="button" title="新标签页" aria-label="新标签页">+</button>
+  </header>
+
+  <div class="navbar">
+    <button class="icon" id="back" type="button" title="后退" aria-label="后退" disabled>←</button>
+    <button class="icon" id="forward" type="button" title="前进" aria-label="前进" disabled>→</button>
+    <button class="icon" id="reload" type="button" title="刷新" aria-label="刷新">↻</button>
+    <input id="url" type="text" spellcheck="false" autocomplete="off" aria-label="地址" placeholder="输入网址，或者要搜的内容">
+    <button class="icon" id="external" type="button" title="在系统浏览器打开" aria-label="在系统浏览器打开">↗</button>
+  </div>
+
+  <main class="stage" id="stage">
+    <section class="view" id="view">
+      <canvas id="screen" aria-label="网页画面"></canvas>
+      <textarea id="ime" aria-label="网页输入" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+      <div class="select-menu" id="selectMenu" hidden></div>
+      <div class="start" id="start" hidden>
+        <div class="start-inner">
+          <section id="startSites" hidden>
+            <div class="start-head"><h2>常去</h2></div>
+            <div class="tiles" id="startTiles"></div>
+          </section>
+          <section id="startRecent" hidden>
+            <div class="start-head">
+              <h2>最近</h2>
+              <button class="text" id="startClear" type="button">清空记录</button>
+            </div>
+            <div class="recent" id="startList"></div>
+          </section>
+          <p class="start-hint" id="startHint" hidden>在上面的地址栏输入网址，或者直接输入要搜的内容</p>
+        </div>
+      </div>
+      <div class="veil" id="veil">
+        <p id="veilText">正在启动浏览器</p>
+        <button class="primary" id="veilRetry" type="button" hidden>重试</button>
+      </div>
+      <div class="modal" id="modal" hidden>
+        <form class="modal-box" id="modalForm">
+          <p id="modalText"></p>
+          <textarea id="modalInput" rows="2" hidden></textarea>
+          <div class="modal-actions">
+            <button class="text" id="modalCancel" type="button">取消</button>
+            <button class="primary" id="modalOk" type="submit">确定</button>
+          </div>
+        </form>
+      </div>
+      <div class="toast" id="toast" role="status" hidden></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

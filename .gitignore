@@ -1,0 +1,12 @@
+# 只在自己机器上用的附加功能、截图，不公开
+private/
+# 开发时的浏览器资料目录和数据
+.dev-data/
+sidecars/panel/.data/
+# 后台启动时按本机路径生成
+mcp_config.json
+# 装别人的版本之前留的备份
+原版备份/
+# 宣传短片的素材和成品
+video/
+node_modules/
