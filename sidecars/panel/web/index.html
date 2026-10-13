@@ -9,11 +9,12 @@
 </head>
 <body>
   <!--
-    给人看的字都不写在这一页里。属性里放的是 strings.js 里的键名，app.js 一启动就按语言填上：
-      data-t              元素里的文字
-      data-t-title        悬停提示，同时当读屏用的名称
-      data-t-label        只当读屏用的名称
-      data-t-placeholder  输入框里的占位字
+    No user-facing text is written in this page. The attributes hold keys from strings.js, and app.js
+    fills in the text for the chosen language as soon as it starts:
+      data-t              the text inside the element
+      data-t-title        the tooltip, which also serves as the name read by screen readers
+      data-t-label        only the name read by screen readers
+      data-t-placeholder  the placeholder text of an input
   -->
   <header class="tabbar">
     <div class="tabs" id="tabs" role="tablist"></div>

@@ -1,11 +1,11 @@
-// 面板上的字，中文、英文各一份。
+// Every piece of text in the panel, in Chinese and in English.
 //
-// index.html 里用 data-t 之类的属性写键名，app.js 里用 t('键名') 取。
-// 要加一句话就在这里加一条，两种语言都要有；tests/smoke.mjs 会核对用到的键是不是都在。
+// index.html names the keys in attributes such as data-t; app.js fetches them with t('key').
+// To add a sentence, add an entry here, in both languages; tests/smoke.mjs checks that every key in use exists.
 window.workbenchStrings = {
   appName: { zh: '工作台浏览器', en: 'Workbench Browser' },
 
-  // 标签页和地址栏
+  // Tabs and the address bar
   newTab: { zh: '新标签页', en: 'New tab' },
   closeTab: { zh: '关闭标签页', en: 'Close tab' },
   back: { zh: '后退', en: 'Back' },
@@ -18,7 +18,7 @@ window.workbenchStrings = {
   pageView: { zh: '网页画面', en: 'Page view' },
   pageInput: { zh: '网页输入', en: 'Page input' },
 
-  // 新标签页
+  // New-tab page
   frequent: { zh: '常去', en: 'Most visited' },
   recent: { zh: '最近', en: 'Recent' },
   clearHistory: { zh: '清空记录', en: 'Clear history' },
@@ -27,7 +27,7 @@ window.workbenchStrings = {
     en: 'Type an address in the bar above, or just type what you want to search for',
   },
 
-  // 盖在画面上的状态
+  // States shown over the picture
   connecting: { zh: '正在连接插件后台', en: 'Connecting to the plugin backend…' },
   unreachable: {
     zh: '连不上插件后台。插件可能刚重启过：请关掉这个面板再重新打开',
@@ -38,7 +38,7 @@ window.workbenchStrings = {
   crashed: { zh: '这个页面崩溃了', en: 'This page crashed' },
   retry: { zh: '重试', en: 'Retry' },
 
-  // 对话框
+  // Dialogs
   ok: { zh: '确定', en: 'OK' },
   cancel: { zh: '取消', en: 'Cancel' },
   leavePage: { zh: '离开这个页面？没保存的内容会丢。', en: 'Leave this page? Changes you have not saved will be lost.' },
@@ -50,7 +50,7 @@ window.workbenchStrings = {
     en: 'This page is asking for files. Enter the full path of each file, one per line.',
   },
 
-  // 提示
+  // Notices
   noResponse: { zh: '插件后台没有响应', en: 'The plugin backend is not responding' },
   copyFailed: { zh: '复制失败', en: 'Copy failed' },
 };

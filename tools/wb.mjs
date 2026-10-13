@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// 给 agent 用的小命令，和「工作台浏览器」面板后台说话。
+// A small command for the agent that talks to the backend of the Workbench Browser panel.
 //
-//   node wb.mjs status          浏览器开没开、开着哪些页
-//   node wb.mjs open <网址>      在当前标签页打开网址
+//   node wb.mjs status          whether the browser is running and which pages are open
+//   node wb.mjs open <url>      open an address in the current tab
 //
-// 加 --json 输出原始 JSON。命令失败时退出码是 1，并说明原因。
-// 说的话跟着系统语言走（中文或英文），WORKBENCH_LANG 可以指定。
+// Add --json for the raw JSON. When a command fails, the exit code is 1 and the reason is printed.
+// Its messages follow the system language (Chinese or English); WORKBENCH_LANG overrides it.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';

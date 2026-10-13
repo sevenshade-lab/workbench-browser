@@ -48,4 +48,4 @@ Talk to the user in their own language. This file is in English only so that any
 - A tool reports that the plugin is not running (in Chinese: 插件没在运行): ask the user to check under
   Customizations → Installed that `workbench-browser` is enabled.
 - The panel is blank or stays on "Starting the browser…" (in Chinese: 正在启动浏览器): read the log at
-  `~/.gemini/antigravity/sidecar_data/workbench-browser/panel/logs/sidecar.log`. The log lines are in Chinese.
+  `~/.gemini/antigravity/sidecar_data/workbench-browser/panel/logs/sidecar.log`.

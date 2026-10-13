@@ -3,8 +3,9 @@ import { say } from './lang.mjs';
 
 const disconnected = () => new Error(say('浏览器连接已断开', 'The connection to the browser was lost'));
 
-// Chrome 的管道调试通道：一条消息一个 JSON，以 \0 结尾。
-// 用管道而不是端口，是因为管道一断 Chrome 就自己退出，插件被杀也不会留下孤儿浏览器。
+// Chrome's debug channel over a pipe: one JSON message at a time, each terminated by \0.
+// A pipe rather than a port, because Chrome exits by itself when the pipe breaks, so killing the plugin
+// never leaves an orphan browser behind.
 export class CdpPipe extends EventEmitter {
   #out;
   #nextId = 1;

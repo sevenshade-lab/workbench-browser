@@ -1,7 +1,8 @@
-// 注入到每个页面「隔离环境」里的小帮手：页面自己的脚本看不到它，它也不改页面内容。
-// 只做两件无界面浏览器做不了的事：
-//   1. 原生下拉框（<select>）的弹出列表不会出现在画面里，改成把选项报给面板，由面板画一个列表；
-//   2. 鼠标指针的样子不在画面里，报给面板让它跟着变。
+// A small helper injected into an isolated world of every page: the page's own scripts cannot see it,
+// and it does not change the page. It does only the two things a headless browser cannot do by itself:
+//   1. The popup list of a native dropdown (<select>) never shows up in the picture, so the options are
+//      reported to the panel, which draws the list;
+//   2. The mouse cursor is not part of the picture, so its shape is reported to the panel, which follows it.
 export const HELPER_WORLD = 'workbench_browser_helper';
 export const HELPER_BINDING = '__workbenchBrowserHost';
 
@@ -9,10 +10,11 @@ export const HELPER_SOURCE = `(() => {
   if (globalThis.__workbenchBrowserInstalled) return;
   globalThis.__workbenchBrowserInstalled = true;
   const report = (message) => {
-    try { ${HELPER_BINDING}(JSON.stringify(message)); } catch (error) { /* 通道还没接上，丢掉这一条 */ }
+    try { ${HELPER_BINDING}(JSON.stringify(message)); } catch (error) { /* the channel is not connected yet; drop this one */ }
   };
 
-  // 标题：调试通道只在换地址时报一次（那时还是占位标题），之后页面改标题不通知，所以自己盯着。
+  // Title: the debug channel reports it only once, when the address changes (it is still a placeholder then),
+  // and says nothing when the page changes its title later, so watch it here.
   if (window === window.top) {
     let lastTitle = null;
     let titleTimer = 0;

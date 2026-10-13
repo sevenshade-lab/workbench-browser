@@ -6,9 +6,10 @@ import { CdpPipe } from './cdp.mjs';
 import { HELPER_BINDING, HELPER_SOURCE, HELPER_WORLD } from './helper-script.mjs';
 import { say } from './lang.mjs';
 
-// 面板里那个真浏览器：一个无界面的 Chrome（没有就用 Edge），有自己的资料目录，登录状态留在里面。
-// 画面一帧帧送给面板，面板上的鼠标键盘原样送回来。同一个浏览器另开了调试端口，
-// 给 agent 的浏览器工具接，所以人和 agent 看到、操作的是同一批页面。
+// The real browser behind the panel: a headless Chrome (Edge if Chrome is missing) with its own profile,
+// where logins stay. The picture is sent to the panel frame by frame, and the panel's mouse and keyboard
+// input is sent back as is. The same browser also opens a debug port for the agent's browser tools,
+// so the user and the agent see and operate the same set of pages.
 
 const STREAM_QUALITY = 75;
 const SHARPEN_AFTER_MS = 400;
@@ -33,7 +34,8 @@ export function findBrowserExecutable() {
 
 export const httpOnly = () => new Error(say('只能打开 http 或 https 地址', 'Only http and https addresses can be opened'));
 
-// 地址栏里敲的东西 → 能打开的地址。只放行 http/https，本机文件和 chrome:// 之类不给进。
+// What was typed into the address bar → an address that can be opened. Only http/https is let through;
+// local files, chrome:// and the like are refused.
 export function normalizeUrl(input, home) {
   const raw = String(input || '').trim();
   if (!raw) return home;
@@ -58,23 +60,25 @@ export function normalizeUrl(input, home) {
   return url.href;
 }
 
-// 这台机器上有的父进程会带着 TZ=CST-8 这种写法的时区往下传，Chromium 认不得，
-// 页面里的时间会整个错掉。不是标准地名写法的就不往下传，让浏览器用系统时区。
+// Some parent processes pass down a time zone written like TZ=CST-8, which Chromium does not understand,
+// and every time shown in a page would be wrong. Anything that is not a standard Area/Location name is not
+// passed on, so the browser uses the system time zone.
 function browserEnv() {
   const env = { ...process.env };
   if (env.TZ && !/^[A-Za-z_]+\/[A-Za-z0-9_+\-/]+$/.test(env.TZ)) delete env.TZ;
   return env;
 }
 
-// zh、en 是「在等什么」的两种说法，超时的时候拼进报错里。
+// zh and en are the two ways of saying what is being waited for; they go into the error message on timeout.
 const withTimeout = (promise, ms, zh, en) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error(say(`${zh}超时`, `Timed out ${en}`))), ms);
   promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
 });
 
-// 浏览器自己的内部页面（地址栏弹层、扩展后台页之类）也会报成 page，不能当标签页。
+// The browser's own internal pages (the omnibox popup, extension background pages and so on) are also
+// reported as "page" targets; they must not be treated as tabs.
 const isPage = (info) => info.type === 'page' && !/^(devtools|chrome-extension|chrome|chrome-untrusted|edge):/i.test(info.url || '');
-// 标签页刚开出来时那一页空白不算历史，后退不该退到白页上去。
+// The blank page a tab starts with does not count as history; going back must not land on a blank page.
 const firstRealEntry = (history) => (history.entries[0]?.url === 'about:blank' ? 1 : 0);
 const originOf = (url) => {
   try {
@@ -112,17 +116,18 @@ export class BrowserHost extends EventEmitter {
     this.tabs = new Map();
     this.order = [];
     this.activeId = null;
-    // dpr 是面板所在屏幕的缩放比。没有面板连着时（agent 自己叫醒浏览器）沿用上次面板报的。
+    // dpr is the scale factor of the screen the panel is on. With no panel connected (the agent woke the browser
+    // by itself), the last value a panel reported is used.
     let lastDpr = 1;
     try {
       lastDpr = Number(JSON.parse(readFileSync(this.displayFile, 'utf8')).dpr) || 1;
     } catch {
-      // 还没存过
+      // never saved yet
     }
     this.viewport = { width: 1280, height: 800, dpr: lastDpr };
-    // 浏览器按哪个缩放比起的。起了之后不再变——见 #applyViewport 的说明。
+    // The scale factor the browser was started with. It never changes afterwards; see the note on #applyViewport.
     this.launchDpr = lastDpr;
-    // 这次启动以来有没有面板连上来过（见 matchDisplay）。
+    // Whether a panel has connected since this start (see matchDisplay).
     this.panelSeen = false;
     this.product = '';
     this.lastError = '';
@@ -137,7 +142,7 @@ export class BrowserHost extends EventEmitter {
     return this.tabs.get(this.activeId) || null;
   }
 
-  // agent 的浏览器工具靠这个文件找到同一个浏览器。
+  // The agent's browser tools find the same browser through this file.
   get debugPort() {
     try {
       const [port] = readFileSync(join(this.profileDir, 'DevToolsActivePort'), 'utf8').split('\n');
@@ -169,7 +174,7 @@ export class BrowserHost extends EventEmitter {
     };
   }
 
-  // ---------- 启动与关闭 ----------
+  // ---------- Start and stop ----------
 
   async ensure() {
     if (this.running) return;
@@ -177,7 +182,8 @@ export class BrowserHost extends EventEmitter {
       this.lastError = '';
       this.#changed();
       this.#starting = (async () => {
-        // 上一个浏览器刚退、资料目录还没放手时，新的会一起来就退出；等一下再试两次。
+        // Right after the previous browser exits, while it has not yet let go of the profile, a new one exits as
+        // soon as it starts; wait a little and try twice more.
         for (let attempt = 0; ; attempt++) {
           try {
             await this.#launch();
@@ -202,7 +208,7 @@ export class BrowserHost extends EventEmitter {
   async #launch() {
     const exe = findBrowserExecutable();
     if (!exe) {
-      // 再试也不会有，直接报。
+      // Retrying will not make one appear; report it right away.
       throw Object.assign(new Error(say('没找到 Chrome 或 Edge，内置浏览器起不来', 'Chrome or Edge was not found, so the built-in browser cannot start')), { retry: false });
     }
     mkdirSync(this.profileDir, { recursive: true });
@@ -218,8 +224,9 @@ export class BrowserHost extends EventEmitter {
       '--hide-crash-restore-bubble',
       '--window-size=1280,800',
       `--force-device-scale-factor=${this.launchDpr}`,
-      // 浏览器自己用哪种语言（网站据此给哪种语言的页面）：不指定，让它跟系统走，和用户平时的 Chrome 一样。
-      // 想另指一种就设 WORKBENCH_BROWSER_LANG（比如 ja、en-GB）。
+      // Which language the browser itself uses (websites choose the page language from it): none is given, so it
+      // follows the system, like the user's everyday Chrome.
+      // Set WORKBENCH_BROWSER_LANG to choose another (for example ja or en-GB).
       ...(process.env.WORKBENCH_BROWSER_LANG ? [`--lang=${process.env.WORKBENCH_BROWSER_LANG}`] : []),
       'about:blank',
     ], { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], windowsHide: true, env: browserEnv() });
@@ -233,7 +240,7 @@ export class BrowserHost extends EventEmitter {
     this.#cdp = cdp;
     cdp.on('close', () => {
       if (this.#cdp !== cdp) return;
-      this.log('浏览器已退出');
+      this.log('browser exited');
       this.#teardown();
       this.emit('closed');
       this.#changed();
@@ -242,7 +249,7 @@ export class BrowserHost extends EventEmitter {
       try {
         this.#onEvent(message);
       } catch (error) {
-        this.log('处理浏览器事件出错：' + error.message);
+        this.log('error while handling a browser event: ' + error.message);
       }
     });
 
@@ -250,7 +257,8 @@ export class BrowserHost extends EventEmitter {
     try {
       version = await withTimeout(cdp.send('Browser.getVersion'), 20000, '等待浏览器启动', 'waiting for the browser to start');
     } catch (error) {
-      // 同一个资料目录已经有浏览器在跑时，新进程会把活交给旧的然后立刻退出。
+      // When a browser is already running on the same profile, the new process hands the work over to it and
+      // exits at once.
       const detail = stderr ? stderr.trim().split('\n').pop() : '';
       throw new Error(say(
         `浏览器没能启动（${error.message}）${detail ? '：' + detail : ''}`,
@@ -258,7 +266,7 @@ export class BrowserHost extends EventEmitter {
       ));
     }
     this.product = version.product || '';
-    this.log(`浏览器已启动：${this.product}`);
+    this.log(`browser started: ${this.product}`);
 
     const firstTab = new Promise((resolve) => { this.#firstTab = resolve; });
     await cdp.send('Target.setDiscoverTargets', { discover: true });
@@ -271,7 +279,7 @@ export class BrowserHost extends EventEmitter {
     try {
       saved = JSON.parse(readFileSync(this.tabsFile, 'utf8'));
     } catch {
-      // 第一次用，没有存过
+      // first use, nothing saved yet
     }
     const urls = (Array.isArray(saved.urls) ? saved.urls : []).filter((url) => originOf(url)).slice(0, MAX_RESTORED_TABS);
     if (!urls.length) urls.push(this.homeUrl);
@@ -282,7 +290,8 @@ export class BrowserHost extends EventEmitter {
       for (const url of urls.slice(1)) {
         await this.#cdp.send('Target.createTarget', { url }).catch(() => {});
       }
-      // 其余标签页是异步挂上来的，等它们到齐再切回上次停留的那个。
+      // The other tabs attach asynchronously; wait until they are all here, then switch back to the one that was
+      // active last time.
       const deadline = Date.now() + 3000;
       while (this.order.length < urls.length && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -294,7 +303,8 @@ export class BrowserHost extends EventEmitter {
     }
   }
 
-  // 关浏览器，等它真的退干净再返回（紧接着重开时，资料目录不能还被旧进程占着）。
+  // Close the browser and return only once it has really exited (when it is reopened right away, the profile
+  // must no longer be held by the old process).
   async shutdown() {
     if (!this.running) return;
     this.#saveTabsNow();
@@ -313,14 +323,16 @@ export class BrowserHost extends EventEmitter {
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 
-  // 浏览器是 agent 先叫醒的（那时没有面板，不知道屏幕缩放比），现在面板连上来了、缩放比对不上：
-  // 趁还没人看过，按面板的缩放比重开一次，不然人看到的字是放大糊掉的。标签页按地址恢复。
+  // The agent woke the browser first (there was no panel then, so the screen's scale factor was unknown), and
+  // now a panel has connected with a different scale factor: while nobody has looked at it yet, restart once
+  // at the panel's scale factor, otherwise the text the user sees is upscaled and blurry.
+  // Tabs are restored by address.
   async matchDisplay(dpr) {
     const wanted = Math.min(3, Math.max(1, Math.round((Number(dpr) || 1) * 100) / 100));
     const stale = this.running && !this.panelSeen && wanted !== this.launchDpr;
     this.panelSeen = true;
     if (!stale) return false;
-    this.log(`按面板的缩放比 ${wanted} 重开浏览器（原来是 ${this.launchDpr}）`);
+    this.log(`restarting the browser at the panel's scale factor ${wanted} (was ${this.launchDpr})`);
     await this.shutdown();
     return true;
   }
@@ -340,11 +352,11 @@ export class BrowserHost extends EventEmitter {
     this.#proc = null;
     this.#cdp = null;
     if (proc && proc.exitCode === null) {
-      try { proc.kill(); } catch { /* 已经没了 */ }
+      try { proc.kill(); } catch { /* already gone */ }
     }
   }
 
-  // ---------- 标签页 ----------
+  // ---------- Tabs ----------
 
   #onEvent({ method, params, sessionId }) {
     if (!sessionId) {
@@ -357,7 +369,8 @@ export class BrowserHost extends EventEmitter {
           this.#cdp.send('Target.detachFromTarget', { sessionId: tab.sessionId }).catch(() => {});
           this.#removeTab(tab.id);
         } else if (tab) {
-          // 这个事件只在换地址时来，带的标题是加载前的占位；真正的标题由页面里的帮手报上来。
+          // This event only comes when the address changes, and the title it carries is the placeholder from before
+          // loading; the real title is reported by the helper inside the page.
           if (info.url && info.url !== tab.infoUrl) {
             tab.infoUrl = info.url;
             tab.title = info.title || '';
@@ -404,9 +417,11 @@ export class BrowserHost extends EventEmitter {
           tab.unreachable = !!params.frame.unreachableUrl;
           tab.url = params.frame.unreachableUrl || params.frame.url;
           tab.crashed = false;
-          // 跨站跳转会换渲染进程，帮手的通道有时没跟着装上，这里补一次（重复装无害）。
+          // A cross-site navigation switches to another renderer process and the helper's channel is sometimes not
+          // carried over, so add it again here (adding it twice is harmless).
           this.#send(tab, 'Runtime.addBinding', { name: HELPER_BINDING, executionContextName: HELPER_WORLD }).catch(() => {});
-          // 后台标签页自己在动（多半是 agent 在里面干活）：亮个点，不抢画面。
+          // A background tab is moving by itself (most likely the agent is working in it): light its dot, do not
+          // take over the picture.
           if (tab.id !== this.activeId && !this.#restoring) tab.busy = true;
           this.#refreshHistory(tab);
           this.#changed();
@@ -483,13 +498,15 @@ export class BrowserHost extends EventEmitter {
       this.#bySession.set(sessionId, tab);
       this.order.push(id);
       await this.#setupTab(tab);
-      // 人刚在页面上点了一下就冒出来的新标签页，是那一下点开的（target=_blank 的链接、弹出窗口）。
+      // A new tab that pops up right after the user clicked on the page was opened by that click
+      // (a target=_blank link, a popup window).
       const openedByClick = (info.openerId && info.openerId === this.activeId) || Date.now() - this.#lastUserClick < 1500;
       const userAsked = this.#pendingActivate.delete(id) || this.#pendingActivate.delete('next');
       if (!this.activeId || userAsked || (openedByClick && !this.#restoring)) {
         await this.selectTab(id);
       } else if (!this.#restoring) {
-        // 不是人开的新标签页，就是 agent 开的：人此刻没在点没在打字就跟过去看，否则只亮个点。
+        // A new tab the user did not open was opened by the agent: follow it if the user is not clicking or typing
+        // right now, otherwise just light its dot.
         if (Date.now() - this.#lastUserInput > USER_BUSY_MS) await this.selectTab(id);
         else tab.busy = true;
       }
@@ -499,7 +516,7 @@ export class BrowserHost extends EventEmitter {
         this.#firstTab = null;
       }
     } catch (error) {
-      this.log(`挂接标签页失败：${error.message}`);
+      this.log(`failed to attach to a tab: ${error.message}`);
     } finally {
       this.#attaching.delete(id);
     }
@@ -507,7 +524,8 @@ export class BrowserHost extends EventEmitter {
 
   async #setupTab(tab) {
     await this.#send(tab, 'Page.enable');
-    // 不开 Runtime，帮手报的信收不到。先给通道再装帮手，帮手一运行就能报信。
+    // Without Runtime enabled, the helper's messages never arrive. Add the channel first and install the helper
+    // after it, so the helper can report as soon as it runs.
     await this.#send(tab, 'Runtime.enable').catch(() => {});
     await this.#send(tab, 'Runtime.addBinding', { name: HELPER_BINDING, executionContextName: HELPER_WORLD }).catch(() => {});
     await this.#send(tab, 'Page.addScriptToEvaluateOnNewDocument', { source: HELPER_SOURCE, worldName: HELPER_WORLD, runImmediately: true }).catch(() => {});
@@ -520,9 +538,10 @@ export class BrowserHost extends EventEmitter {
       tab.unreachable = !!frameTree.frame.unreachableUrl;
       tab.url = frameTree.frame.unreachableUrl || frameTree.frame.url || tab.url;
     } catch {
-      // 页面正在换，等导航事件来补
+      // the page is changing; a navigation event will fill this in
     }
-    // 挂上来时页面可能早就加载完了，不会再有加载结束的事件，这里补读一次标题。
+    // The page may have finished loading long before the tab was attached, so no load-finished event will come;
+    // read the title once here.
     this.#refreshTitle(tab);
   }
 
@@ -573,7 +592,7 @@ export class BrowserHost extends EventEmitter {
     await this.#cdp.send('Target.closeTarget', { targetId: id }).catch(() => {});
   }
 
-  // ---------- 导航 ----------
+  // ---------- Navigation ----------
 
   async navigate(input, tabId = this.activeId) {
     await this.ensure();
@@ -610,7 +629,7 @@ export class BrowserHost extends EventEmitter {
     if (tab) await this.#send(tab, 'Page.stopLoading');
   }
 
-  // 帮手报不上来的页面（比如出错页）用这个兜底。
+  // The fallback for pages where the helper cannot report (an error page, for example).
   async #refreshTitle(tab) {
     try {
       const result = await this.#send(tab, 'Runtime.evaluate', { expression: 'document.title', returnByValue: true });
@@ -620,7 +639,7 @@ export class BrowserHost extends EventEmitter {
         this.#changed();
       }
     } catch {
-      // 页面正在换
+      // the page is changing
     }
   }
 
@@ -637,12 +656,12 @@ export class BrowserHost extends EventEmitter {
           this.#changed();
         }
       } catch {
-        // 标签页刚关
+        // the tab has just closed
       }
     }, 120);
   }
 
-  // ---------- 画面 ----------
+  // ---------- Picture ----------
 
   async setViewport({ width, height, dpr }) {
     const next = {
@@ -656,7 +675,7 @@ export class BrowserHost extends EventEmitter {
         mkdirSync(this.dataDir, { recursive: true });
         writeFileSync(this.displayFile, JSON.stringify({ dpr: next.dpr }), 'utf8');
       } catch {
-        // 记不下来不要紧，下次按默认起
+        // it does not matter if this cannot be saved; the default is used next time
       }
     }
     this.viewport = next;
@@ -668,22 +687,27 @@ export class BrowserHost extends EventEmitter {
     this.#verifyViewport(tab);
   }
 
-  // 只改页面的宽高，不模拟缩放比（deviceScaleFactor: 0）；缩放比在启动时用命令行定死
-  //（--force-device-scale-factor），整个浏览器天生就是那个比例。
-  // 早先在这里连缩放比一起模拟，结果鼠标坐标时对时错：点 (300,300) 页面收到 (200,200)，
-  // 每改一次视口还可能翻一次面。那时同时在用 Page.captureScreenshot 补清晰图——它遇到
-  //「模拟的缩放比 ≠ 真实缩放比」会临时改一轮模拟参数再恢复，多半是两边撞车。没有再去分清
-  // 到底是谁，两样都不用了：这样 Chrome 里不存在需要来回恢复的模拟状态。
-  // 面板之后换到缩放比不同的屏幕，画面由面板缩放显示，下次启动浏览器时再跟上。
+  // Only the page's width and height are changed; the scale factor is not emulated (deviceScaleFactor: 0).
+  // The scale factor is fixed on the command line at start (--force-device-scale-factor), so the whole
+  // browser natively has that ratio.
+  // Earlier the scale factor was emulated here as well, and mouse coordinates were right at some times and
+  // wrong at others: a click at (300,300) reached the page as (200,200), and every viewport change could flip
+  // it again. Page.captureScreenshot was used at the same time to fetch a sharp picture, and when the emulated
+  // scale factor differs from the real one it temporarily changes the emulation settings and restores them,
+  // so the two most likely collided. It was never worked out which of the two was at fault; both were dropped,
+  // and now Chrome holds no emulation state that has to be restored back and forth.
+  // If the panel later moves to a screen with a different scale factor, the panel scales the picture, and the
+  // browser catches up at its next start.
   async #applyViewport(tab) {
     const { width, height } = this.viewport;
     await this.#send(tab, 'Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 0, mobile: false }).catch(() => {});
   }
 
-  // 有面板开着才出画面；没人看就停，省 CPU。
+  // The picture is produced only while a panel is open; it stops when nobody is watching, to save CPU.
   async setCasting(on) {
     this.#casting = on;
-    // 标题平时靠页面里的帮手报；有面板看着的时候再定时核一遍，帮手没装上的页面也不会停在旧标题。
+    // Titles normally come from the helper inside the page; while a panel is watching they are also checked on
+    // a timer, so a page where the helper is not installed does not stay stuck on an old title.
     clearInterval(this.#titleTimer);
     this.#titleTimer = on ? setInterval(() => {
       for (const tab of this.tabs.values()) if (!tab.dialog) this.#refreshTitle(tab);
@@ -695,8 +719,9 @@ export class BrowserHost extends EventEmitter {
     else await this.#stopCast(tab);
   }
 
-  // 开（或按新参数重开）画面流。format 不给就沿用上次要的格式。
-  // 页面正在跳转的那一瞬间 Chrome 会拒绝（Not attached to an active page），所以失败了要接着试。
+  // Start the screencast (or restart it with new settings). Without format, the format asked for last time is kept.
+  // At the very moment a page navigates, Chrome refuses (Not attached to an active page), so keep trying
+  // after a failure.
   #startCast(tab, format) {
     if (format) tab.castWanted = format;
     if (tab.castStarting) {
@@ -742,11 +767,14 @@ export class BrowserHost extends EventEmitter {
     await this.#send(tab, 'Page.stopScreencast').catch(() => {});
   }
 
-  // 画面在动时用有损格式（快）；静下来 0.4 秒就把画面流切成无损格式，Chrome 重开时会立刻送一张，字就清楚了。
-  // 无损模式里零星的变化（光标闪一下、敲一个字）照样无损地送；帧来得密说明又动起来了，切回有损。
+  // While the picture is moving a lossy format is used (fast). After 0.4 seconds of stillness the screencast is
+  // switched to a lossless format; Chrome sends one frame right away when it restarts, and the text becomes sharp.
+  // Occasional changes in lossless mode (a cursor blink, one typed character) are still sent lossless; frames
+  // arriving in quick succession mean motion again, so switch back to lossy.
   //
-  // 不用 Page.captureScreenshot 补清晰图：它收尾时会把视口恢复成它开始时的样子，
-  // 正好撞上面板改大小，新尺寸就被冲掉（实测必现），页面不重排、画面被挤扁。
+  // Page.captureScreenshot is not used for the sharp picture: when it finishes it restores the viewport to what
+  // it was when it began, which collides with the panel resizing, and the new size is wiped out (reproduced
+  // every time): the page does not reflow and the picture is squashed.
   #onFrame(tab, params) {
     this.#send(tab, 'Page.screencastFrameAck', { sessionId: params.sessionId }).catch(() => {});
     if (tab.id !== this.activeId || !this.#casting) return;
@@ -756,7 +784,8 @@ export class BrowserHost extends EventEmitter {
     tab.lastFrameAt = now;
     clearTimeout(tab.sharpTimer);
     if (tab.castFormat === 'png') {
-      // 刚切过来时 Chrome 可能连送两张，不算「动起来了」，否则会在两种格式之间来回倒。
+      // Right after switching, Chrome may send two frames in a row; that does not count as motion, otherwise it
+      // would flip back and forth between the two formats.
       if (moving && now - tab.formatSince > 300) this.#startCast(tab, 'jpeg');
     } else {
       tab.sharpTimer = setTimeout(() => this.#startCast(tab, 'png'), SHARPEN_AFTER_MS);
@@ -764,7 +793,8 @@ export class BrowserHost extends EventEmitter {
     this.#checkViewport(tab, params.metadata);
   }
 
-  // 帧里带着页面当时的实际大小。和面板要的对不上（比如 agent 那边的工具动过视口），就重新设一次。
+  // A frame carries the page's actual size at that moment. If it does not match what the panel asked for
+  // (for example a tool on the agent's side changed the viewport), set it again.
   #checkViewport(tab, metadata) {
     if (!metadata) return;
     const { width, height } = this.viewport;
@@ -773,14 +803,15 @@ export class BrowserHost extends EventEmitter {
     if (matches) {
       tab.mismatchSince = 0;
     } else if (!tab.mismatchSince) {
-      tab.mismatchSince = now; // 可能只是改大小的命令还在路上，等一等
+      tab.mismatchSince = now; // maybe the resize command is still on its way; wait a little
     } else if (now - tab.mismatchSince > 700 && now - tab.viewportFixedAt > 2000) {
       tab.viewportFixedAt = now;
       this.#applyViewport(tab);
     }
   }
 
-  // 没有新帧的静止页面，上面那个检查碰不到；改完大小、切到一个标签页之后主动核一次。
+  // A still page with no new frames never reaches the check above; after a resize or a switch to another tab,
+  // check once actively.
   async #verifyViewport(tab, attempt = 0) {
     await new Promise((resolve) => setTimeout(resolve, 450));
     if (!this.tabs.has(tab.id) || tab.dialog) return;
@@ -791,13 +822,13 @@ export class BrowserHost extends EventEmitter {
       if (Math.abs(actualWidth - width) <= 1 && Math.abs(actualHeight - height) <= 1) return;
       await this.#applyViewport(tab);
       if (attempt < 3) this.#verifyViewport(tab, attempt + 1);
-      else this.log(`页面大小设不上：要 ${width}x${height}，实际 ${actualWidth}x${actualHeight}`);
+      else this.log(`could not set the page size: wanted ${width}x${height}, got ${actualWidth}x${actualHeight}`);
     } catch {
-      // 页面正在换
+      // the page is changing
     }
   }
 
-  // ---------- 输入 ----------
+  // ---------- Input ----------
 
   #touch() {
     this.#lastUserInput = Date.now();
@@ -856,7 +887,8 @@ export class BrowserHost extends EventEmitter {
     }
   }
 
-  // 输入法上屏的字、表情面板之类：不走按键，直接当成一段文字插进去。
+  // Text committed by an IME, the emoji panel and the like: not sent as key presses but inserted directly
+  // as a piece of text.
   insertText(text) {
     const tab = this.active;
     if (!tab || tab.dialog || !text) return;
@@ -875,12 +907,13 @@ export class BrowserHost extends EventEmitter {
     }
   }
 
-  // 粘贴：先把文字放进这个浏览器自己的剪贴板，再按一次 Ctrl+V。
-  // 这样页面收到的是一次真粘贴，富文本编辑器才会按段落处理；不行再退回逐段插入。
+  // Paste: put the text into this browser's own clipboard first, then press Ctrl+V once.
+  // The page then receives a real paste, which is what makes rich-text editors handle paragraphs properly;
+  // if that fails, fall back to inserting the text.
   async paste(input, tabId = this.activeId) {
     const tab = this.tabs.get(tabId);
     if (!tab || tab.dialog || typeof input !== 'string' || !input) return 'none';
-    // Windows 剪贴板里的换行是 \r\n，原样贴进富文本框会多出空行。
+    // Line breaks in the Windows clipboard are \r\n; pasted as is into a rich-text box they produce extra blank lines.
     const text = input.replace(/\r\n?/g, '\n');
     this.#touch();
     if (await this.#clipboardReady(tab)) {
@@ -898,14 +931,15 @@ export class BrowserHost extends EventEmitter {
           return 'paste';
         }
       } catch {
-        // 页面不让用剪贴板，走下面
+        // the page does not allow clipboard access; continue below
       }
     }
     await this.#send(tab, 'Input.insertText', { text }).catch(() => {});
     return 'insert';
   }
 
-  // 面板上按了 Ctrl+C / Ctrl+X 之后来取：读这个浏览器的剪贴板，交给面板写进系统剪贴板。
+  // Called after Ctrl+C / Ctrl+X in the panel: read this browser's clipboard and hand it to the panel,
+  // which writes it to the system clipboard.
   async readClipboard() {
     const tab = this.active;
     if (!tab || !(await this.#clipboardReady(tab))) return '';
@@ -974,7 +1008,7 @@ export class BrowserHost extends EventEmitter {
     }
   }
 
-  // ---------- 读页面（给看板核对用，只读不改） ----------
+  // ---------- Reading pages (for extensions that check results; read-only) ----------
 
   async evaluate(expression, tabId = this.activeId) {
     const tab = this.tabs.get(tabId);
@@ -988,7 +1022,7 @@ export class BrowserHost extends EventEmitter {
     return this.evaluate('document.body ? document.body.innerText : ""', tabId);
   }
 
-  // ---------- 内部 ----------
+  // ---------- Internals ----------
 
   #send(tab, method, params = {}) {
     if (!this.#cdp) return Promise.reject(new Error(say('浏览器没在运行', 'The browser is not running')));
@@ -1020,7 +1054,7 @@ export class BrowserHost extends EventEmitter {
       mkdirSync(this.dataDir, { recursive: true });
       writeFileSync(this.tabsFile, JSON.stringify({ urls, active: Math.max(0, this.order.indexOf(this.activeId)) }, null, 2), 'utf8');
     } catch (error) {
-      this.log('记标签页失败：' + error.message);
+      this.log('failed to save the tab list: ' + error.message);
     }
   }
 }

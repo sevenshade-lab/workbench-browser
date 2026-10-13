@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
-// 面板和插件后台之间的 WebSocket（RFC 6455 服务端）。
-// Antigravity 自带的运行时没有 npm，SDK 也只管普通 HTTP，所以这一小段自己写。
+// The WebSocket between the panel and the plugin backend (an RFC 6455 server).
+// The runtime bundled with Antigravity has no npm and the SDK only handles plain HTTP, so this small piece
+// is written by hand.
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_MESSAGE = 16 * 1024 * 1024;
 
@@ -50,7 +51,8 @@ export class WsConnection extends EventEmitter {
     return this.#open;
   }
 
-  // 还没写进系统缓冲区的字节数；画面帧靠它判断对面是不是跟不上了。
+  // Bytes not yet handed to the system buffer; the frame sender uses it to tell whether the other side is
+  // falling behind.
   get backlog() {
     return this.#socket.writableLength;
   }
@@ -107,7 +109,7 @@ export class WsConnection extends EventEmitter {
       length = Number(big);
       offset = 10;
     }
-    // 浏览器发来的帧必须带掩码，没带就是别的东西在连。
+    // Frames sent by a browser must be masked; an unmasked frame means something else is connecting.
     if (!masked) return this.#protocolError(1002);
     if (length > MAX_MESSAGE) return this.#protocolError(1009);
     if (buffer.length < offset + 4 + length) return null;

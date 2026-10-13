@@ -21,7 +21,7 @@ mkdirSync(DATA_DIR, { recursive: true });
 const log = (text) => console.log(`[${new Date().toISOString()}] ${text}`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// 新标签页是空白页，面板在上面画「常去」和「最近」。
+// The new-tab page is a blank page; the panel draws "Most visited" and "Recent" on top of it.
 const browser = new BrowserHost({ dataDir: DATA_DIR, homeUrl: 'about:blank', log });
 const history = new History(join(DATA_DIR, 'history.json'));
 
@@ -37,20 +37,22 @@ const stateMessage = () => ({ t: 'state', ...browser.snapshot() });
 
 browser.on('state', () => broadcast(stateMessage()));
 browser.on('frame', (frame) => {
-  // 对面来不及收就丢这一帧：每帧都是整张图，丢了下一帧补上，不会花屏。
+  // If the other side cannot keep up, drop this frame: every frame is a full picture, so the next one
+  // makes up for it and the picture never gets corrupted.
   for (const client of clients) if (client.backlog < MAX_FRAME_BACKLOG) client.sendBinary(frame);
 });
 browser.on('select', (menu) => broadcast({ t: 'select', ...menu }));
 browser.on('cursor', (cursor) => broadcast({ t: 'cursor', cursor }));
 browser.on('closed', () => broadcast(stateMessage()));
 
-// ---------- 去过的页 ----------
+// ---------- Visited pages ----------
 
 const PAGE_ICON = `(() => {
   const links = [...document.querySelectorAll('link[rel~="icon"]')];
   return links.length ? links[links.length - 1].href : '';
 })()`;
-// 页面一停下来就记一笔；标题常常比加载完成晚一点才定下来，所以过一会儿再补一次标题，顺便取图标。
+// A page is recorded as soon as it settles. The title is often final only a little after loading ends,
+// so record the title once more a moment later and fetch the icon at the same time.
 const pendingTitles = new Map();
 browser.on('settled', (tab) => {
   if (tab.unreachable) return;
@@ -84,7 +86,8 @@ const file = (path, contentType, edit = (text) => text) => () => new Response(ed
   headers: { 'Cache-Control': 'no-store' },
 });
 const asset = (name, contentType, edit) => file(join(WEB, name), contentType, edit);
-// 送出页面时填两样东西：附加功能要加载的脚本和样式；语言是不是被指定死了（没指定就由面板自己定，见 lib/lang.mjs）。
+// Two things are filled in when the page is served: the scripts and styles that extensions want loaded,
+// and whether the language has been fixed (if not, the panel decides by itself; see lib/lang.mjs).
 app.page('/', asset('index.html', 'text/html; charset=utf-8', (html) => html
   .replace('<html', () => `<html data-forced-lang="${forcedLanguage()}"`)
   .replace('</head>', () => panelTags.head + '</head>')
@@ -93,7 +96,8 @@ app.page('/strings.js', asset('strings.js', 'application/javascript; charset=utf
 app.page('/app.js', asset('app.js', 'application/javascript; charset=utf-8'));
 app.api('/styles.css', asset('styles.css', 'text/css; charset=utf-8'), 'GET');
 
-// 面板用的接口都是 POST，SDK 会验面板令牌；失败统一回 { ok: false, error }，不让面板猜。
+// The panel's endpoints are all POST and the SDK checks the panel token. Failures always come back as
+// { ok: false, error }, so the panel never has to guess.
 const guarded = (handler) => async (data) => {
   try {
     return await handler(data || {});
@@ -111,8 +115,9 @@ app.api('/api/open-external', guarded((data) => {
   return { ok: true };
 }));
 
-// agent 用的接口：凭 endpoint.json 里的钥匙（本机当前用户才读得到）。
-// 主体能做的只有：叫醒浏览器、看状态、打开网址。页面上的操作走浏览器工具（MCP）。
+// The agent's endpoint: it requires the key in endpoint.json (readable only by the current user of this machine).
+// All the main body can do here is wake the browser, report status and open an address.
+// Actions on a page go through the browser tools (MCP).
 const keyOk = (given) => {
   const a = Buffer.from(String(given || ''));
   const b = Buffer.from(agentKey);
@@ -126,14 +131,15 @@ app.api('/api/agent', guarded(async (data) => {
       await browser.ensure();
       return { ok: true, debugPort: browser.debugPort, profileDir: browser.profileDir };
     case 'status':
-      // panels 是连着的面板总数，其中 polling 个走的是普通请求那条后备路。
+      // panels is the total number of connected panels; polling is how many of them use the fallback path
+      // over plain requests.
       return { ok: true, ...browser.snapshot(), debugPort: browser.debugPort, panels: clients.size, polling: pollClients.size, lang: language() };
     case 'open':
       await browser.ensure();
       return { ok: true, tab: await browser.navigate(String(data.url || '')) };
     case 'quit':
-      // 新后台启动时用它请旧后台让位。先回话再退。
-      setTimeout(() => quit('新的后台起来了，这个让位退出'), 50);
+      // A starting backend uses this to ask the old one to step down. Reply first, then exit.
+      setTimeout(() => quit('a newer backend has started; this one steps down and exits'), 50);
       return { ok: true };
     default:
       if (Object.hasOwn(agentOps, data.op)) return agentOps[data.op](data);
@@ -141,15 +147,17 @@ app.api('/api/agent', guarded(async (data) => {
   }
 }), 'GET');
 
-// ---------- 附加功能 ----------
+// ---------- Extensions ----------
 //
-// extensions/<名字>/index.mjs 有就加载，没有这个目录就是纯浏览器。每个附加功能导出 setup(context)，
-// 可以自己用 context.app 加接口，也可以返回：
-//   agentOps     给 /api/agent 加操作（{ 名字: async (data) => 结果 }）
-//   panelScript  面板里要加载的脚本（文件路径），用 window.workbenchBrowser 加按钮和侧栏
-//   panelStyle   面板里要加载的样式（文件路径）
-//   timeZone     面板上的日期按哪个时区显示（不给就按系统的）
-//   language     这个附加功能只有一种语言（'zh' 或 'en'）时声明，整个面板就固定用它，免得一半中文一半英文
+// extensions/<name>/index.mjs is loaded if present; without that folder this is a plain browser.
+// Each extension exports setup(context). It can add endpoints itself through context.app, and it can return:
+//   agentOps     operations added to /api/agent ({ name: async (data) => result })
+//   panelScript  a script for the panel to load (a file path); it uses window.workbenchBrowser to add
+//                buttons and a side column
+//   panelStyle   a stylesheet for the panel to load (a file path)
+//   timeZone     the time zone for dates shown in the panel (the system's if not given)
+//   language     declared by an extension that has only one language ('zh' or 'en'); the whole panel then
+//                stays in that language instead of ending up half Chinese and half English
 const agentOps = {};
 const panelTags = { head: '', body: '' };
 let displayTimeZone = '';
@@ -172,15 +180,16 @@ for (const name of existsSync(EXTENSIONS_DIR) ? readdirSync(EXTENSIONS_DIR).sort
       panelTags.head += `<link rel="stylesheet" href="/ext-${name}.css">
 `;
     }
-    log(`已加载附加功能 ${name}`);
+    log(`extension loaded: ${name}`);
   } catch (error) {
-    log(`附加功能 ${name} 没加载上：${error.message}`);
+    log(`extension ${name} failed to load: ${error.message}`);
   }
 }
 
-// agent 的浏览器工具入口要在插件根目录的 mcp_config.json 里登记，而且得写绝对路径。
-// 用 agy plugin install 装的没有人替它写，所以后台每次启动自己核对一遍：没有或者路径不对就写上。
-// 刚写上的这一次，Antigravity 可能要重启才读得到。
+// The entry for the agent's browser tools must be registered in mcp_config.json in the plugin root, with an
+// absolute path. Nobody writes it for a copy installed with agy plugin install, so the backend checks it at
+// every start and writes it if it is missing or the path is wrong.
+// Right after it is first written, Antigravity may need a restart to pick it up.
 const PLUGIN_ROOT = join(HERE, '..', '..');
 const mcpEntry = join(PLUGIN_ROOT, 'mcp', 'launch.mjs');
 if (!process.env.WORKBENCH_NO_MCP_CONFIG && existsSync(join(PLUGIN_ROOT, 'plugin.json')) && existsSync(mcpEntry)) {
@@ -190,14 +199,14 @@ if (!process.env.WORKBENCH_NO_MCP_CONFIG && existsSync(join(PLUGIN_ROOT, 'plugin
   try {
     current = readFileSync(configFile, 'utf8');
   } catch {
-    // 还没有
+    // not there yet
   }
   if (current !== wanted) {
     try {
       writeFileSync(configFile, wanted, 'utf8');
-      log('已登记 agent 的浏览器工具入口（mcp_config.json）；工具没出现的话重启一次 Antigravity');
+      log('registered the browser tools for the agent (mcp_config.json); restart Antigravity once if the tools do not show up');
     } catch (error) {
-      log('没能写 mcp_config.json：' + error.message);
+      log('could not write mcp_config.json: ' + error.message);
     }
   }
 }
@@ -206,11 +215,13 @@ const server = await app.run();
 const port = server?.address?.()?.port || Number(process.env.ANTIGRAVITY_SIDECAR_WEB_PORT);
 const startedAt = new Date().toISOString();
 
-// ---------- 同一时间只留一个后台 ----------
+// ---------- Only one backend at a time ----------
 //
-// Antigravity 重启时不一定把上一个后台关掉（实测：语言服务没了，它起的 cmd 壳和后台还活着）。
-// 旧后台占着浏览器的资料目录，新后台起的浏览器发现目录被占会立刻退出，面板上就是「浏览器没能启动」。
-// 两头都防：新后台启动时让登记在册的旧后台退出；每个后台自己也盯着语言服务，它不在了就退。
+// Restarting Antigravity does not always stop the previous backend (observed: the language server is gone,
+// but the cmd shell it started and the backend are still alive). The old backend keeps the browser profile
+// locked, the browser started by the new backend sees the lock and exits at once, and the panel shows
+// "The browser could not start". So there are two guards: a starting backend makes the registered old one
+// exit, and every backend also watches the language server and exits when it is gone.
 
 const instancesFile = join(DATA_DIR, 'instances.json');
 const alive = (pid) => {
@@ -228,7 +239,7 @@ async function retireOthers() {
     try {
       known.push(...[].concat(JSON.parse(readFileSync(file, 'utf8'))));
     } catch {
-      // 没有这份记录
+      // no such record
     }
   }
   const handled = new Set([process.pid]);
@@ -240,22 +251,24 @@ async function retireOthers() {
       const response = await fetch(`http://127.0.0.1:${other.port}/api/agent?key=${other.key}&op=${op}`, { signal: AbortSignal.timeout(2500) });
       return response.json();
     };
-    // 认钥匙的才是我们自己的旧后台。进程号可能早被别的程序占了，不认的一律不碰。
+    // Only one that accepts the key is an old backend of ours. The pid may long since belong to another program;
+    // anything that does not accept the key is left alone.
     const ours = await ask('status').then((status) => status.ok === true, () => false);
     if (!ours) continue;
-    // 对方刚起来不到 20 秒：多半是两个 Antigravity 各管一个后台在互相顶，这边不抢，免得来回杀个没完。
+    // The other one started less than 20 seconds ago: most likely two Antigravity instances each own a backend
+    // and are pushing each other out. Do not fight over it, or they would keep killing each other.
     if (Date.now() - Date.parse(other.startedAt || 0) < Number(process.env.WORKBENCH_YIELD_GUARD_MS || 20000)) {
-      log(`另一个后台（进程 ${other.pid}）刚启动，不去动它`);
+      log(`another backend (pid ${other.pid}) has just started; leaving it alone`);
       continue;
     }
-    log(`上一个后台（进程 ${other.pid}）还开着，让它退出`);
+    log(`the previous backend (pid ${other.pid}) is still running; asking it to exit`);
     await ask('quit').catch(() => {});
     for (let i = 0; i < 25 && alive(other.pid); i++) await sleep(200);
     if (alive(other.pid)) {
       try {
         process.kill(other.pid);
       } catch {
-        // 刚好自己退了
+        // it exited by itself just now
       }
     }
   }
@@ -276,8 +289,10 @@ function quit(reason) {
   browser.shutdown().catch(() => {}).finally(() => process.exit(0));
 }
 
-// 语言服务的地址是 Antigravity 启动后台时给的（host:port）。连上过之后又连续三次连不上，就当 Antigravity 已经不在了。
-// 「连上过」这个前提很要紧：万一哪个版本给的地址这边连不了，不能因此把好好的后台自己退掉。
+// The language server address is given by Antigravity when it starts the backend (host:port). Once it has
+// been reachable, three failures in a row mean Antigravity is gone.
+// "Once it has been reachable" matters: if some version hands over an address that cannot be reached from
+// here, a perfectly good backend must not exit because of that.
 const languageServer = /^(.+):(\d+)$/.exec(String(process.env.ANTIGRAVITY_LS_ADDRESS || '').replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, ''));
 if (languageServer) {
   let reachedOnce = false;
@@ -296,9 +311,9 @@ if (languageServer) {
       }
       misses += 1;
       if (reachedOnce && misses === 3) {
-        quit('Antigravity 的语言服务不在了，这个后台没人管了，退出');
+        quit('the Antigravity language server is gone, so nothing owns this backend any more; exiting');
       } else if (!reachedOnce && misses === 5) {
-        log(`语言服务地址 ${languageServer[0]} 一次都没连上，不靠它判断 Antigravity 在不在`);
+        log(`the language server address ${languageServer[0]} was never reachable; not using it to tell whether Antigravity is running`);
         clearInterval(watch);
       }
     };
@@ -309,13 +324,15 @@ if (languageServer) {
   watch.unref();
 }
 
-// ---------- 面板连接 ----------
+// ---------- Panel connection ----------
 //
-// Antigravity 不让面板直连这个后台：面板页面挂在 plugin://<一串字> 下面，它发的每个普通请求
-// 由 Antigravity 主进程转给一层带鉴权的网关，网关再转到这里。普通请求这样走得通，长连接走不通。
-// 所以面板先用普通请求来问一声（/api/link），拿到这个后台的真实端口和一把钥匙，
-// 再直接连 ws://127.0.0.1:<端口>。直连不上的时候（比如从别的设备远程看 Antigravity），
-// 退回到全用普通请求：/api/poll 取画面和消息，/api/input 送鼠标键盘。
+// Antigravity does not let the panel connect to this backend directly: the panel page lives under
+// plugin://<some id>, and every plain request it makes is forwarded by the Antigravity main process to an
+// authenticated gateway, which forwards it here. Plain requests get through this way; long-lived connections
+// do not. So the panel first asks with a plain request (/api/link) and gets this backend's real port and a key,
+// then connects to ws://127.0.0.1:<port> directly. When the direct connection is not possible (for example
+// when Antigravity is viewed remotely from another device), it falls back to plain requests only:
+// /api/poll for the picture and messages, /api/input for mouse and keyboard.
 
 const panelKey = randomBytes(24).toString('hex');
 
@@ -329,7 +346,8 @@ function detachClient(client) {
   if (!clients.size) browser.setCasting(false).catch(() => {});
 }
 
-// 用普通请求顶替长连接时的「面板」：对外和长连接的那一头长得一样（sendText / sendBinary / backlog / open）。
+// The "panel" when plain requests stand in for the long-lived connection: from the outside it looks the same
+// as the WebSocket end (sendText / sendBinary / backlog / open).
 class PollClient {
   open = true;
   backlog = 0;
@@ -353,15 +371,16 @@ class PollClient {
     this.sendText(JSON.stringify(value));
   }
 
-  // 只留最新一帧：面板来取的时候拿到的总是当前画面。
+  // Only the latest frame is kept: whenever the panel asks, it gets the current picture.
   sendBinary(frame) {
     this.#frame = frame;
     this.#frameSeq += 1;
     this.#wake();
   }
 
-  // 有新消息或新画面就立刻回；都没有就挂着等，最多 20 秒。
-  // 回的是一段二进制：4 字节头长 + JSON 头（消息、帧序号）+ 画面（有新的才带）。
+  // Answer at once if there is a new message or a new frame; otherwise hold the request, for at most 20 seconds.
+  // The answer is binary: a 4-byte header length + a JSON header (messages, frame number) + the picture
+  // (only when there is a new one).
   next(haveSeq) {
     this.lastSeen = Date.now();
     if (this.#messages.length || this.#frameSeq > haveSeq) return Promise.resolve(this.#take(haveSeq));
@@ -401,7 +420,7 @@ function pollClient(session, create) {
   }
   return client || null;
 }
-// 面板关掉后不会再来取；半分钟没动静就当它走了。
+// A closed panel stops asking; after half a minute of silence it is considered gone.
 setInterval(() => {
   for (const [session, client] of pollClients) {
     if (client.waiting || Date.now() - client.lastSeen < 30000) continue;
@@ -411,7 +430,8 @@ setInterval(() => {
   }
 }, 5000).unref();
 
-// 面板来问路的时候顺便报上它定的界面语言，这边给人看的报错跟着用同一种。
+// When the panel asks for the way in, it also reports the UI language it chose; error messages meant for
+// people then use the same one.
 app.api('/api/link', guarded((data) => {
   reportLanguage(data.lang);
   return { ok: true, port, key: panelKey, session: randomBytes(12).toString('hex') };
@@ -425,16 +445,18 @@ app.api('/api/poll', guarded(async (data) => {
   });
 }));
 app.api('/api/input', guarded((data) => {
-  // 面板一连上就先报自己的大小，这一条常常比第一次 /api/poll 先到，所以这里也要能开出会话。
+  // A panel reports its size as soon as it connects, and that message often arrives before the first /api/poll,
+  // so a session has to be created here as well.
   const client = pollClient(data.session, true);
   if (!client) return { ok: false, error: say('会话无效', 'Invalid session') };
   client.lastSeen = Date.now();
   for (const message of Array.isArray(data.messages) ? data.messages : []) handleClientMessage(client, message);
   return { ok: true };
 }));
-// 面板那头出了什么事（连接走的哪条路、被什么拦了），记到这边的日志里，排查时不用找用户要截图。
+// Whatever happens on the panel side (which path the connection took, what blocked it) is written to the log
+// here, so diagnosing a problem does not need a screenshot from the user.
 app.api('/api/client-log', guarded((data) => {
-  log('[面板] ' + String(data.text || '').slice(0, 400));
+  log('[panel] ' + String(data.text || '').slice(0, 400));
   return { ok: true };
 }));
 
@@ -452,7 +474,8 @@ function handleClientMessage(client, message) {
   if (!message || typeof message !== 'object') return;
   const run = (work) => Promise.resolve().then(work).catch((error) => client.sendJson({ t: 'error', message: error.message }));
   switch (message.t) {
-    // 面板连上后第一件事是报自己多大、屏幕缩放比多少；浏览器等拿到这个再起，缩放比才对。
+    // The first thing a panel does after connecting is report its size and the screen's scale factor; the browser
+    // waits for that before starting, so the scale factor is right.
     case 'resize': run(async () => {
       await browser.setViewport(message);
       await browser.matchDisplay(message.dpr);
@@ -485,7 +508,7 @@ async function startFor(client) {
     if (clients.size) await browser.setCasting(true);
   } catch (error) {
     if (client.open) client.sendJson(stateMessage());
-    log('浏览器启动失败：' + error.message);
+    log('browser failed to start: ' + error.message);
   }
 }
 
@@ -505,15 +528,16 @@ if (server && typeof server.on === 'function') {
     attachClient(client);
   });
 } else {
-  log('这一版 SDK 没有交出服务器对象，面板连不上后台；需要更新插件');
+  log('this SDK version does not expose the server object, so the panel cannot connect to the backend; the plugin needs an update');
 }
 
-// 没人看、agent 也半小时没动：把浏览器关掉省内存。登录状态在资料目录里，下次打开还在。
+// Nobody is watching and the agent has been idle for half an hour: close the browser to save memory.
+// Logins stay in the profile and are still there next time.
 setInterval(() => {
   if (!browser.running || clients.size) return;
   const idle = Date.now() - Math.max(browser.lastActivity, lastAgentPing);
   if (idle > IDLE_SHUTDOWN_MS) {
-    log('空闲，关闭浏览器');
+    log('idle; closing the browser');
     browser.shutdown().catch(() => {});
   }
 }, 60 * 1000).unref();

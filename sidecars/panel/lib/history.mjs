@@ -1,10 +1,10 @@
-// 去过哪些页：新标签页上的「常去」和「最近」从这里来。
-// 只存在本机的数据目录里，和浏览器的资料目录放在一起，不往任何地方发。
+// Visited pages: the source of "Most visited" and "Recent" on the new-tab page.
+// Kept only in the data folder on this machine, next to the browser profile; never sent anywhere.
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const MAX_PAGES = 400;
 const MAX_ICON_BYTES = 60 * 1024;
-// 同一页半分钟内又停下来一次（刷新、页内跳转来回）不重复计数。
+// A page that settles again within half a minute (a reload, in-page navigation back and forth) is not counted twice.
 const REVISIT_MS = 30 * 1000;
 
 const originOf = (url) => {
@@ -28,11 +28,11 @@ export class History {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
       if (saved && typeof saved.pages === 'object' && typeof saved.icons === 'object') this.data = saved;
     } catch {
-      // 第一次用，或者文件坏了：从空的开始
+      // First use, or the file is damaged: start empty
     }
   }
 
-  // 返回这一页所在的站点；不是 http/https 的页不记，返回空。
+  // Returns the site this page belongs to; pages that are not http/https are not recorded and return an empty value.
   record({ url, title }, now = Date.now()) {
     const origin = originOf(url);
     if (!origin) return '';
@@ -54,7 +54,8 @@ export class History {
     return !!origin && !this.data.icons[origin] && !this.#iconMisses.has(origin);
   }
 
-  // 取不到就这一次运行里不再试；下次启动再试，免得一个取不到的图标每开一页都去要一遍。
+  // If the icon cannot be fetched, do not try again during this run; try again after the next start,
+  // so that an icon that cannot be fetched is not requested on every page load.
   async fetchIcon(origin, href) {
     if (!this.needsIcon(origin)) return;
     this.#iconMisses.add(origin);
@@ -69,11 +70,11 @@ export class History {
       this.data.icons[origin] = `data:${type};base64,${bytes.toString('base64')}`;
       this.#saveSoon();
     } catch {
-      // 没图标就用默认的地球
+      // No icon: the default globe is used
     }
   }
 
-  // 常去：按站点合并，取去得最多的那一页当入口。最近：按页，新的在前。
+  // Most visited: merged by site, with the most visited page of each site as its entry. Recent: by page, newest first.
   summary() {
     const sites = new Map();
     const pages = Object.entries(this.data.pages).map(([url, page]) => ({ url, ...page }));
@@ -116,7 +117,7 @@ export class History {
     try {
       writeFileSync(this.#file, JSON.stringify(this.data), 'utf8');
     } catch {
-      // 存不上不影响浏览
+      // Failing to save does not affect browsing
     }
   }
 }

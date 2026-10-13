@@ -1,11 +1,14 @@
-// 把这个项目装进 Antigravity 的插件目录，替换掉里面原来那一版。只拷插件本身那几样，测试和脚本不拷。
-// 有 private/plugin/ 的话（只在自己机器上用、不公开的附加功能），一并叠上去。
+// Installs this project into Antigravity's plugin folder, replacing the copy that is there. Only the parts
+// that make up the plugin are copied; tests and scripts are not.
+// If private/plugin/ exists (extensions used only on your own machine and not published), it is laid on top.
 //
-//   node scripts/install.mjs            只说明会做什么，不动任何东西
-//   node scripts/install.mjs --apply    真的装：先整份备份原来的，再换文件，再重启插件
+//   node scripts/install.mjs            only says what it would do; changes nothing
+//   node scripts/install.mjs --apply    really installs: backs up the old copy in full, replaces the files,
+//                                       then restarts the plugin
 //
-// 换文件和重启插件必须一起做：旧后台还在跑的时候目录里已经是新文件，它会找不到自己的页面。
-// 说的话跟着系统语言走（中文或英文），WORKBENCH_LANG 可以指定。
+// Replacing the files and restarting the plugin have to happen together: while the old backend is still
+// running and the folder already holds the new files, it cannot find its own pages.
+// Its messages follow the system language (Chinese or English); WORKBENCH_LANG overrides it.
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -20,7 +23,7 @@ const target = join(homedir(), '.gemini', 'config', 'plugins', 'workbench-browse
 const dataDir = join(homedir(), '.gemini', 'antigravity', 'sidecar_data', 'workbench-browser', 'panel', 'data');
 const apply = process.argv.includes('--apply');
 const stamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace(/[-: ]/g, '').slice(0, 12);
-const backup = join(root, '原版备份', stamp);
+const backup = join(root, 'backups', stamp);
 const note = (text) => console.log((apply ? '' : say('[预演] ', '[dry run] ')) + text);
 
 if (!existsSync(join(root, 'plugin.json'))) {
@@ -28,7 +31,8 @@ if (!existsSync(join(root, 'plugin.json'))) {
   process.exit(1);
 }
 
-// 只备份「不是这个项目装进去的」版本：本项目的版本里一定有 lib/browser.mjs，源码都在这边，不用再存一份。
+// Only a copy that was not installed from this project is backed up: this project's copy always contains
+// lib/browser.mjs, and its source is all here, so there is no need to keep another copy.
 const hasOld = existsSync(join(target, 'plugin.json')) && !existsSync(join(target, 'sidecars', 'panel', 'lib', 'browser.mjs'));
 note(hasOld
   ? say(`备份原来的插件到 ${backup}`, `Back up the plugin that is installed now to ${backup}`)
@@ -44,7 +48,8 @@ if (apply && hasOld) {
   }
 }
 
-// 清空目录但不强求删掉目录本身：旧后台还在跑的时候，它占着自己那个文件夹，Windows 不让删。
+// Empty the folder without insisting on removing the folder itself: while the old backend is still running
+// it holds its own folder, and Windows does not allow deleting it.
 function emptyDir(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
@@ -53,7 +58,7 @@ function emptyDir(dir) {
       try {
         rmdirSync(path);
       } catch {
-        // 有进程占着，留着空目录，下面拷新文件时接着用
+        // held by a process: leave the empty folder, the new files are copied into it below
       }
     } else {
       rmSync(path, { force: true });
@@ -70,8 +75,9 @@ if (apply) {
     if (existsSync(join(root, part))) cpSync(join(root, part), join(target, part), { recursive: true });
   }
   if (existsSync(overlay)) cpSync(overlay, target, { recursive: true });
-  // agent 的浏览器工具入口：配置里要写绝对路径。后台启动时也会自己补这个文件，
-  // 这里先写好，Antigravity 一重启插件就能读到对的。
+  // The entry for the agent's browser tools: the configuration needs an absolute path. The backend also writes
+  // this file by itself at start; it is written here first so that Antigravity reads the right one as soon as
+  // it restarts the plugin.
   writeFileSync(join(target, 'mcp_config.json'), JSON.stringify({
     mcpServers: {
       'workbench-browser': { command: 'node', args: [join(target, 'mcp', 'launch.mjs')] },
@@ -79,7 +85,7 @@ if (apply) {
   }, null, 2), 'utf8');
 }
 
-// 插件后台现在是哪个进程（后台启动时自己写进 endpoint.json）。
+// Which process is the plugin backend right now (the backend writes it to endpoint.json at start).
 function sidecarPid() {
   try {
     return JSON.parse(readFileSync(join(dataDir, 'endpoint.json'), 'utf8')).pid;
@@ -98,8 +104,9 @@ function alive(pid) {
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// agy 只是改配置里的开关，Antigravity 过几秒才注意到。关了马上开，它根本没察觉，后台还是旧的那个进程。
-// 所以要等旧后台真的退了再开，开了之后等新后台真的起来。
+// agy only flips a switch in the configuration, and Antigravity notices a few seconds later. Disable followed
+// immediately by enable goes unnoticed, and the backend is still the same old process.
+// So wait until the old backend has really exited before enabling, then wait until the new backend is really up.
 note(say(
   '重启插件：agy plugin disable workbench-browser → 等旧后台退出 → enable → 等新后台起来',
   'Restart the plugin: agy plugin disable workbench-browser → wait for the old backend to exit → enable → wait for the new backend',

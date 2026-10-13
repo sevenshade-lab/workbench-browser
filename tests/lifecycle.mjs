@@ -1,8 +1,9 @@
-// 后台的生老病死：Antigravity 重启时旧后台常常没被关掉，占着浏览器的资料目录，
-// 新后台的浏览器就起不来（2026-10-12 实际出过）。这里验两道保险：
-//   1. 新后台启动时，请登记在册的旧后台让位退出；
-//   2. Antigravity 的语言服务不在了，后台自己退出，浏览器跟着退。
-// 用法：node tests/lifecycle.mjs
+// The life cycle of the backend: when Antigravity restarts, the old backend is often not stopped and keeps
+// the browser profile locked, so the browser of the new backend cannot start (this really happened on
+// 2026-10-12). Two guards are checked here:
+//   1. a starting backend asks the registered old backend to step down and exit;
+//   2. when Antigravity's language server is gone, the backend exits by itself and the browser exits with it.
+// Usage: node tests/lifecycle.mjs
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
@@ -19,13 +20,14 @@ const loader = join(homedir(), '.gemini', 'antigravity', 'lib', 'node_modules', 
 
 const page = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end('<!doctype html><meta charset="utf-8"><title>首页</title><p>首页</p>');
+  res.end('<!doctype html><meta charset="utf-8"><title>Home</title><p>Home</p>');
 });
 await new Promise((resolve) => page.listen(0, '127.0.0.1', resolve));
 
-// 扮成 Antigravity 的语言服务：只要这个端口连得上，后台就认为 Antigravity 还在。
+// Pretends to be Antigravity's language server: as long as this port accepts connections, the backend
+// believes Antigravity is still running.
 const languageServer = net.createServer((socket) => {
-  // 后台探一下就把连接掐掉，这边会收到一个连接重置，不算错。
+  // The backend probes and drops the connection right away, so a connection reset arrives here; that is not an error.
   socket.on('error', () => {});
   socket.end();
 });
@@ -68,7 +70,7 @@ async function waitFor(what, check, timeout = 15000) {
       value = false;
     }
     if (value) return value;
-    if (Date.now() > deadline) throw new Error(`等不到：${what}`);
+    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${what}`);
     await sleep(150);
   }
 }
@@ -87,35 +89,35 @@ let failed = false;
 async function step(name, work) {
   try {
     await work();
-    results.push(`  通过  ${name}`);
+    results.push(`  pass  ${name}`);
   } catch (error) {
     failed = true;
-    results.push(`  失败  ${name}\n        ${String(error.message).split('\n').slice(0, 10).join('\n        ')}`);
+    results.push(`  FAIL  ${name}\n        ${String(error.message).split('\n').slice(0, 10).join('\n        ')}`);
   }
 }
 
 let first;
 let second;
 try {
-  await step('第一个后台起来，浏览器开着', async () => {
+  await step('the first backend starts and its browser is running', async () => {
     first = startSidecar(4793);
-    await waitFor('第一个后台的 endpoint.json', () => existsSync(join(dataDir, 'endpoint.json')) && endpoint().port === 4793);
+    await waitFor('endpoint.json of the first backend', () => existsSync(join(dataDir, 'endpoint.json')) && endpoint().port === 4793);
     assert.equal((await agent('op=ensure')).ok, true);
     assert.equal((await agent('op=status')).running, true);
     assert.equal(await browsers(), 1);
   });
 
-  await step('第二个后台起来（好比 Antigravity 重启了）：第一个被请走，它的浏览器跟着退', async () => {
-    await sleep(1800); // 过了「刚启动的不动」那个保护期
+  await step('the second backend starts (as if Antigravity had restarted): the first is asked to leave and its browser exits with it', async () => {
+    await sleep(1800); // past the guard period during which a just-started backend is left alone
     second = startSidecar(4794);
-    await waitFor('第一个后台退出', () => first.exited, 20000);
-    await waitFor('endpoint.json 换成第二个', () => endpoint().port === 4794);
-    assert.match(second.log, /上一个后台（进程 \d+）还开着，让它退出/);
-    assert.match(first.log, /新的后台起来了，这个让位退出/);
-    await waitFor('第一个后台的浏览器退干净', async () => (await browsers()) === 0, 30000);
+    await waitFor('the first backend to exit', () => first.exited, 20000);
+    await waitFor('endpoint.json to switch to the second backend', () => endpoint().port === 4794);
+    assert.match(second.log, /the previous backend \(pid \d+\) is still running; asking it to exit/);
+    assert.match(first.log, /a newer backend has started; this one steps down and exits/);
+    await waitFor('the browser of the first backend to exit completely', async () => (await browsers()) === 0, 30000);
   });
 
-  await step('第二个后台能把浏览器起起来（资料目录没被占着）', async () => {
+  await step('the second backend can start the browser (the profile is not locked)', async () => {
     const woke = await agent('op=ensure');
     assert.equal(woke.ok, true, JSON.stringify(woke));
     const status = await agent('op=status');
@@ -123,11 +125,11 @@ try {
     assert.equal(await browsers(), 1);
   });
 
-  await step('语言服务没了（好比 Antigravity 被关掉）：后台自己退出，浏览器跟着退', async () => {
+  await step('the language server goes away (as if Antigravity had been closed): the backend exits by itself and the browser exits with it', async () => {
     languageServer.close();
-    await waitFor('第二个后台退出', () => second.exited, 20000);
-    assert.match(second.log, /语言服务不在了/);
-    await waitFor('浏览器退干净', async () => (await browsers()) === 0, 30000);
+    await waitFor('the second backend to exit', () => second.exited, 20000);
+    assert.match(second.log, /language server is gone/);
+    await waitFor('the browser to exit completely', async () => (await browsers()) === 0, 30000);
   });
 } finally {
   first?.child.kill('SIGKILL');
@@ -138,10 +140,10 @@ try {
   try {
     rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   } catch {
-    // 留给系统清
+    // left for the system to clean up
   }
   console.log(results.join('\n'));
-  if (failed) console.log('\n---- 第一个后台 ----\n' + (first?.log || '').slice(-1200) + '\n---- 第二个后台 ----\n' + (second?.log || '').slice(-1200));
-  console.log(failed ? '\n有失败项' : '\n全部通过');
+  if (failed) console.log('\n---- first backend ----\n' + (first?.log || '').slice(-1200) + '\n---- second backend ----\n' + (second?.log || '').slice(-1200));
+  console.log(failed ? '\nSome steps failed' : '\nAll passed');
   process.exit(failed ? 1 : 0);
 }

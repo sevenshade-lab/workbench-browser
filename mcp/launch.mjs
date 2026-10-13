@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// agent 的浏览器工具：把 Antigravity 自带的 chrome-devtools-mcp 接到面板里那个浏览器上，
-// 所以 agent 读的、点的、填的，就是侧边栏里人正看着的那几页。
+// The agent's browser tools: connects the chrome-devtools-mcp bundled with Antigravity to the browser behind
+// the panel, so what the agent reads, clicks and fills in is the very pages the user is looking at in the
+// side panel.
 //
-// 这个脚本自己不实现任何工具，只做转发；外加一件事：agent 每次调工具之前，
-// 先确认浏览器开着（空闲久了会自动关掉省内存），没开就叫醒。
+// This script implements no tools itself; it only forwards. One more thing: before each tool call from the
+// agent it makes sure the browser is running (it closes by itself after a long idle time to save memory)
+// and wakes it if not.
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -63,21 +65,23 @@ const child = spawn(process.execPath, [
   `--userDataDir=${profileDir}`,
   '--no-usage-statistics',
   '--no-performance-crux',
-  // 改视口大小、模拟设备会和面板抢；性能分析用不上。两类都不给，工具列表也短些。
+  // Resizing the viewport and emulating devices would fight with the panel, and performance profiling is not
+  // needed. Neither category is offered, which also keeps the tool list shorter.
   '--no-category-emulation',
   '--no-category-performance',
-  // 网络请求里的 Cookie、令牌之类不交给 agent。
+  // Cookies, tokens and the like in network requests are not handed to the agent.
   '--redactNetworkHeaders',
 ], {
   stdio: ['pipe', 'inherit', 'inherit'],
   windowsHide: true,
-  // 它是随 Antigravity 装的，升不升级跟着 Antigravity 走，不用自己去网上查新版本。
+  // It is installed with Antigravity and is upgraded with Antigravity; no need to check online for new versions.
   env: { ...process.env, CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1' },
 });
 child.on('exit', (code) => process.exit(code ?? 0));
 child.stdin.on('error', () => {});
 
-// MCP 的 stdio 传输是一行一个 JSON。逐行转发，保证顺序；只有 tools/call 需要先叫醒浏览器。
+// The MCP stdio transport is one JSON per line. Forward line by line to keep the order; only tools/call
+// needs the browser to be woken first.
 let queue = Promise.resolve();
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 lines.on('line', (line) => {
@@ -86,7 +90,7 @@ lines.on('line', (line) => {
     try {
       message = JSON.parse(line);
     } catch {
-      // 不是 JSON 就原样转过去，让真正的服务端去报错
+      // not JSON: pass it on as is and let the real server report the error
     }
     if (message && message.method === 'tools/call') {
       try {

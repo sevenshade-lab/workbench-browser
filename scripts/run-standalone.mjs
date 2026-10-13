@@ -1,6 +1,6 @@
-// 脱离 Antigravity 单独把面板后台跑起来，开发和自测用。
-// 用法：node scripts/run-standalone.mjs [端口] [--private]   然后浏览器打开 http://127.0.0.1:<端口>/?token=dev
-// 想看另一种语言的界面，地址后面加 &lang=en 或 &lang=zh。
+// Runs the panel backend on its own, without Antigravity, for development and self-testing.
+// Usage: node scripts/run-standalone.mjs [port] [--private]   then open http://127.0.0.1:<port>/?token=dev in a browser
+// To see the UI in the other language, append &lang=en or &lang=zh to the address.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { say } from '../sidecars/panel/lib/lang.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-// 加 --private 把 private/ 里的附加功能也带上（有的话）。
+// --private also loads the extensions under private/ (if there are any).
 const withPrivate = process.argv.includes('--private');
 const port = process.argv.slice(2).find((arg) => /^\d+$/.test(arg)) || process.env.PORT || '4790';
 const privateExtensions = join(root, 'private', 'plugin', 'sidecars', 'panel', 'extensions');

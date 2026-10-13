@@ -3,20 +3,23 @@
   const query = new URLSearchParams(location.search);
   const token = query.get('token') || '';
 
-  // ---------- 语言 ----------
+  // ---------- Language ----------
   //
-  // 中文还是英文，按先后：地址里的 lang=（预览、测试用）→ 后台指定的（环境变量，或者只有一种语言的附加功能）
-  // → Antigravity 自己在用的语言（面板里的 navigator.language 就是它，一般跟着系统走）。中文用中文，其余用英文。
-  // 定下来以后随 /api/link 告诉后台，后台给人看的报错就和面板是同一种语言。
+  // Chinese or English, decided in this order: lang= in the address (for previews and tests) → a language fixed
+  // by the backend (the environment variable, or an extension that has only one language) → the language
+  // Antigravity itself runs in (navigator.language inside the panel is exactly that; it normally follows the
+  // system). Chinese gets Chinese, everything else gets English.
+  // Once decided, the backend is told with /api/link, so its error messages for people come in the same
+  // language as the panel.
   const lang = (() => {
     const known = (value) => (value === 'zh' || value === 'en' ? value : '');
     return known(query.get('lang')) || known(document.documentElement.dataset.forcedLang)
       || (/^zh(?![a-z])/i.test(navigator.language || '') ? 'zh' : 'en');
   })();
-  // 字表万一没加载上，界面照常能用，只是字的位置显示键名。
+  // If the string table fails to load, the UI still works; it just shows the keys where the text would be.
   const strings = window.workbenchStrings || {};
   const t = (key) => (strings[key] ? strings[key][lang] : key);
-  // 把 index.html 里只写了键名的地方填上字。
+  // Fill in the text wherever index.html only names a key.
   (() => {
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
     document.title = t('appName');
@@ -50,10 +53,11 @@
   const activeTab = () => state.tabs.find((tab) => tab.id === state.active) || null;
   const listeners = new Map();
 
-  // ---------- 和后台的连接 ----------
+  // ---------- Connection to the backend ----------
   //
-  // 这个页面不是从后台直接打开的：Antigravity 把它挂在 plugin://… 下面，普通请求由它转给后台，
-  // 长连接它不转。所以先用普通请求问到后台的真实端口，再直接连过去；直连不上就全用普通请求。
+  // This page is not opened from the backend directly: Antigravity serves it under plugin://… and forwards its
+  // plain requests to the backend, but does not forward long-lived connections. So ask for the backend's real
+  // port with a plain request first, then connect directly; if that fails, use plain requests for everything.
 
   function call(path, body = {}) {
     const options = { method: 'POST', body: JSON.stringify(body) };
@@ -70,13 +74,14 @@
     }
   }
 
-  // 面板这头出的事报给后台记进日志，排查时不用截图。
+  // Things that happen on the panel side are reported to the backend and written to its log, so diagnosing
+  // a problem does not need a screenshot.
   const tell = (text) => {
     call('/api/client-log', { text }).catch(() => {});
   };
-  document.addEventListener('securitypolicyviolation', (event) => tell(`被安全策略拦截：${event.violatedDirective} ${event.blockedURI}`));
-  window.addEventListener('error', (event) => tell(`脚本出错：${event.message} @${event.lineno}`));
-  if (!window.workbenchStrings) tell('strings.js 没加载上，界面上的字只能显示键名');
+  document.addEventListener('securitypolicyviolation', (event) => tell(`blocked by the content security policy: ${event.violatedDirective} ${event.blockedURI}`));
+  window.addEventListener('error', (event) => tell(`script error: ${event.message} @${event.lineno}`));
+  if (!window.workbenchStrings) tell('strings.js did not load; the UI shows string keys instead of text');
 
   async function connect() {
     transport = null;
@@ -89,12 +94,12 @@
       return;
     }
     try {
-      // 地址里带 transport=poll 是测试用的开关：跳过直连，专门走后备路。
-      if (query.get('transport') === 'poll') throw new Error('测试开关');
+      // transport=poll in the address is a switch for testing: skip the direct connection and take the fallback path.
+      if (query.get('transport') === 'poll') throw new Error('test switch');
       transport = await openSocket(link);
-      tell(`面板已连上（直连，页面在 ${location.protocol}//${location.host}；界面语言 ${lang}，Antigravity 报的是 ${navigator.language}）`);
+      tell(`connected (direct, page at ${location.protocol}//${location.host}; UI language ${lang}, Antigravity reports ${navigator.language})`);
     } catch (error) {
-      tell(`直连不通（${error.message}），改用普通请求`);
+      tell(`direct connection failed (${error.message}); falling back to plain requests`);
       transport = openPolling(link);
     }
     retries = 0;
@@ -122,7 +127,7 @@
       let opened = false;
       const timer = setTimeout(() => {
         if (opened) return;
-        reject(new Error('3 秒没连上'));
+        reject(new Error('no connection after 3 seconds'));
         socket.close();
       }, 3000);
       socket.onopen = () => {
@@ -141,7 +146,7 @@
       socket.onclose = () => {
         clearTimeout(timer);
         if (opened) lost();
-        else reject(new Error('被拒绝或被拦截'));
+        else reject(new Error('refused or blocked'));
       };
     });
   }
@@ -160,7 +165,7 @@
         try {
           await call('/api/input', { session: link.session, messages: batch });
         } catch {
-          // 这一批丢了；鼠标键盘是连续的，后面的照发
+          // this batch is lost; mouse and keyboard input is continuous, so the next ones are still sent
         }
       }
       sending = false;
@@ -169,7 +174,7 @@
       while (alive) {
         try {
           const response = await call('/api/poll', { session: link.session, frameSeq });
-          if (!response.ok || !(response.headers.get('content-type') || '').includes('octet-stream')) throw new Error('后台不认这个会话');
+          if (!response.ok || !(response.headers.get('content-type') || '').includes('octet-stream')) throw new Error('the backend does not recognise this session');
           const buffer = await response.arrayBuffer();
           if (!alive) return;
           const headLength = new DataView(buffer).getUint32(0);
@@ -225,7 +230,8 @@
     }
   }
 
-  // 浏览器没起来时自己再试几次（最常见的原因是上一个浏览器还没退干净，等几秒就好），不用人去点「重试」。
+  // When the browser fails to start, try again a few times without anyone having to click Retry (the most
+  // common cause is that the previous browser has not fully exited yet, and a few seconds are enough).
   let startRetries = 0;
   let startTimer = 0;
   function retryStart() {
@@ -239,7 +245,7 @@
     startTimer = setTimeout(() => send({ t: 'start' }), 3000);
   }
 
-  // ---------- 画面 ----------
+  // ---------- Picture ----------
 
   let drawing = false;
   let queued = null;
@@ -263,7 +269,7 @@
         renderVeil();
       }
     } catch {
-      // 坏帧，等下一帧
+      // a bad frame; wait for the next one
     } finally {
       drawing = false;
       if (queued) {
@@ -311,7 +317,7 @@
     showVeil(t('starting'));
   };
 
-  // ---------- 鼠标 ----------
+  // ---------- Mouse ----------
 
   const modifiers = (event) => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
   function pointOf(event) {
@@ -358,7 +364,7 @@
     ime.focus({ preventScroll: true });
     send({ t: 'mouse', type: 'down', ...point, button: event.button, buttons: event.buttons, clickCount: lastDown.count, mods: modifiers(event) });
   });
-  // 不拦这个的话，点一下画面焦点就从隐形输入框跑掉了，键盘接不住。
+  // Without this, one click on the picture moves the focus away from the hidden input and the keyboard is lost.
   canvas.addEventListener('mousedown', (event) => event.preventDefault());
   canvas.addEventListener('pointermove', (event) => {
     pendingMove = { t: 'mouse', type: 'move', ...pointOf(event), buttons: event.buttons, mods: modifiers(event) };
@@ -384,7 +390,7 @@
   }, { passive: false });
   canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
-  // ---------- 键盘、输入法、剪贴板 ----------
+  // ---------- Keyboard, IME, clipboard ----------
 
   const keyMessage = (event, type) => ({
     t: 'key',
@@ -398,11 +404,11 @@
   });
 
   ime.addEventListener('keydown', (event) => {
-    // 输入法正在组字：这些按键是给输入法的，不往页面送。
+    // The IME is composing: these keys are meant for the IME and are not sent to the page.
     if (event.isComposing || event.keyCode === 229) return;
     const command = (event.ctrlKey || event.metaKey) && !event.altKey;
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-    if (command && key === 'v') return; // 交给下面的 paste 事件，才拿得到系统剪贴板里的字
+    if (command && key === 'v') return; // left to the paste event below, the only way to get the text in the system clipboard
     event.preventDefault();
     if (command && key === 'l') {
       urlInput.focus();
@@ -437,7 +443,7 @@
     if (event.data) send({ t: 'text', text: event.data });
     ime.value = '';
   });
-  // 不经过组字直接上屏的东西（中文标点、表情面板、语音输入）走这里。
+  // Text that is committed without composing (Chinese punctuation, the emoji panel, voice input) comes through here.
   ime.addEventListener('input', (event) => {
     if (composing || event.isComposing) return;
     if (ime.value) send({ t: 'text', text: ime.value });
@@ -455,7 +461,7 @@
       await navigator.clipboard.writeText(text);
       return;
     } catch {
-      // 面板在沙箱 iframe 里，这个接口可能不给用，退回老办法
+      // the panel runs in a sandboxed iframe where this API may not be allowed; fall back to the old way
     }
     const focused = document.activeElement;
     const holder = document.createElement('textarea');
@@ -472,7 +478,7 @@
     if (focused && focused.focus) focused.focus({ preventScroll: true });
   }
 
-  // ---------- 标签页与地址栏 ----------
+  // ---------- Tabs and the address bar ----------
 
   const hostOf = (url) => {
     try {
@@ -559,7 +565,7 @@
     if (!result.ok) toast(result.error);
   };
 
-  // ---------- 下拉框、对话框、选文件 ----------
+  // ---------- Dropdowns, dialogs, file choosers ----------
 
   const selectMenu = $('selectMenu');
   function openSelectMenu({ rect, options, selected }) {
@@ -666,10 +672,11 @@
     toastTimer = setTimeout(() => { box.hidden = true; }, 4000);
   }
 
-  // ---------- 新标签页 ----------
+  // ---------- New-tab page ----------
   //
-  // 标签页停在空白页时，面板在画面上盖一层自己画的页：常去的站、最近看过的页。
-  // 浏览器里那一页仍然是真的空白页，agent 看到的也是空白页。
+  // While a tab is on a blank page, the panel covers the picture with a page of its own: frequently visited
+  // sites and recently viewed pages. The page in the browser is still a real blank page, and a blank page is
+  // what the agent sees too.
 
   const GLOBE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9s1.3-6.3 3.8-9z"/></svg>';
   function siteIcon(icon) {
@@ -686,7 +693,8 @@
 
   function whenText(time, timeZone) {
     const options = timeZone ? { timeZone } : {};
-    // 中文界面按中文的写法；英文界面不指定，按这台机器自己的习惯（月和日谁在前各地不一样）。
+    // The Chinese UI uses the Chinese date format; the English UI names no locale and follows this machine's own
+    // convention (whether the month or the day comes first differs from place to place).
     const locale = lang === 'zh' ? 'zh-CN' : undefined;
     const day = new Intl.DateTimeFormat(locale, { ...options, year: 'numeric', month: 'numeric', day: 'numeric' });
     if (day.format(time) === day.format(Date.now())) {
@@ -752,18 +760,19 @@
     loadStart();
   };
 
-  // ---------- 给附加功能用的接口 ----------
+  // ---------- Interface for extensions ----------
   //
-  // 后台的 extensions/ 里有附加功能时，它的脚本排在这个文件后面加载，通过这个对象往面板上加东西。
+  // When the backend has extensions under extensions/, their scripts are loaded after this file and add things
+  // to the panel through this object.
   window.workbenchBrowser = {
-    // 面板现在用的语言：'zh' 或 'en'。
+    // The language the panel is using now: 'zh' or 'en'.
     lang,
     api,
     send,
     toast,
     copyLocal,
     openSite,
-    // 地址栏右边加一个文字按钮。
+    // Add a text button to the right of the address bar.
     addButton(label, onClick) {
       const button = document.createElement('button');
       button.className = 'text';
@@ -773,11 +782,11 @@
       $('external').before(button);
       return button;
     },
-    // 画面右边加一栏。
+    // Add a column to the right of the picture.
     addSidePanel(element) {
       $('stage').append(element);
     },
-    // 后台广播的消息里，主体不认识的类型交给附加功能。
+    // Message types broadcast by the backend that the main body does not know are handed to extensions.
     on(type, handler) {
       listeners.set(type, [...(listeners.get(type) || []), handler]);
     },
