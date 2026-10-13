@@ -1,5 +1,5 @@
 {
   "name": "workbench-browser",
-  "description": "侧边栏里的真浏览器：人和 agent 共用同一批页面，agent 读页面结构去操作，做完读回来核对。",
+  "description": "A real browser in the side panel, shared by you and the agent. 侧边栏里的真浏览器，人和 agent 共用同一批页面。",
   "logo": "assets/logo.svg"
 }
